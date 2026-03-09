@@ -38,6 +38,62 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.4] — 2026-03-09 — Bugfixes & multi-source benchmark
+
+### Fixed
+
+**Bug #1 — BLOQUANT — `tests/test_verification.py` (9 occurrences)**
+- `from solver.formulas import ...` → `from sil_engine.formulas import ...`
+- `from solver.extensions import ...` → `from sil_engine.extensions import ...`
+- Le répertoire `solver/` n'existe pas dans le package publié ; le module s'appelle `sil_engine`.
+- Impact : 6 fonctions `test_*` déclenchaient `ModuleNotFoundError` → 0/6 tests exécutables.
+- Résultat : **6/6 tests pytest PASS** après correction.
+
+**Bug #2 — BLOQUANT — `sil_engine/extensions.py::route_compute()` l.545**
+- `solver = MarkovSolver(p, arch)` → `TypeError: __init__() takes 2 positional arguments but 3 were given`
+- `MarkovSolver.__init__(self, p)` n'accepte qu'un seul argument.  
+  L'architecture est transmise via `p.architecture`, `p.M`, `p.N` (lus par `_build_states()` et `_is_failed()`).
+- Fix : `p_arch = copy(p); p_arch.architecture = arch; p_arch.M = int(arch[0]); p_arch.N = int(arch[-1]); solver = MarkovSolver(p_arch)`
+- Impact : le solveur Markov CTMC **ne s'activait jamais** ; tout cas `λ·T₁ > 0.1` tombait silencieusement en `IEC_simplified_fallback`, rendant la bascule automatique inopérante.
+- Résultat : `route_compute()` → `engine=Markov_CTMC` pour `λ·T₁ > 0.1` ✓
+
+**Bug #3 — FIX — `tests/test_verification.py` cas T11**
+- `expected = 6.3e-2` correspondait à la valeur IEC Table B.9, invalide car `λ·T₁ = 2.19 >> 0.1` (IEC §B.2.2).
+- Le cas portait `"markov_required": True` mais `run_single_case()` appelait quand même `pfd_arch()` (formule IEC).
+- Fix : `expected = 3.76e-2` (valeur Markov CTMC exacte) + routage conditionnel vers `route_compute()` si `markov_required=True`.
+- Résultat : T11 passe de ERREUR (Δ=23%) → **VALIDÉ (Δ=0.1%)** ✓
+
+**Bug #5 — BLOQUANT — `sil_engine/str_solver.py::str_markov()` l.~87**
+- `A[:, -1] = 1.0` remplaçait la dernière **colonne** de `Q^T` → système linéaire incohérent → vecteur `π` non normalisé (somme ≈ 4×10¹⁰) → `STR_Markov = 1635/h` (absurde vs 2.1×10⁻⁶/h analytique).
+- Fix : `A[-1, :] = 1.0` → remplace la dernière **ligne** (contrainte `Σπᵢ = 1`, méthode standard).
+- Source : NTNU Ch.5 slide 38 — *"Replace one row of Q^T with normalization constraint"* ; Rausand §5.3.
+- Résultat : `STR_Markov = 2.104×10⁻⁶/h` → **Δ = 0.0% vs analytique** ✓
+
+### Added
+
+**Benchmark multi-sources `benchmark_architectures.py`** — fichier remplacé et étendu :
+
+- **§0** : résumé des 5 corrections avec justification technique, avant/après, impact
+- **§1** : vérification IEC 61508-6 Annexe B Tables B.4–B.13 (15 cas) — **10 VALIDÉS ±1% | 5 ACCEPTABLES | 0 ERREURS | pass=100%**
+- **§2** : comparaison PFH IEC vs corrigé (Omeiri/Innal/Liu 2021, JESA 54(6):871-879)  
+  Δ = +1866% pour 1oo2/2oo3 à DC=90%, β=0 — terme `2×λDU×(T1/2+MRT)×λDD` absent de l'IEC confirmé
+- **§3** : comparaison PDS Method Handbook 2013 SINTEF (A23298) — modèle CCF β-multiple (CMooN) vs β-standard IEC
+- **§4** : Rausand & Høyland 2004 §5.3 — domaine de validité IEC : Δ<1% si `λ·T₁ < 0.05`, Δ=+35% à `λ·T₁ = 4.38`
+- **§5** : ISA-TR84.00.02-2002 Part 2 §6 — SIF réacteur chimique 5 sous-systèmes (FT 2oo3, PT 1oo2, TS 1oo2, LS 1oo2, PES 1oo2)
+- **§6** : Hardware réel — Triconex TRICON TMR (λDU=5×10⁻¹⁰/h) et Hima HIMatrix F3 (λDU=2.9×10⁻¹⁰/h) d'après FMEDA publiées
+- **§7** : Matrice 11 configurations SIF capteur × logique × actionneur avec contributions S%/L%/FE%
+- **§8** : PFD(t) instantané + Monte Carlo propagation incertitude (EF=3, 10 000 tirages)
+- **§9** : PST gain PFD XV 1oo1, STR par architecture, concordance STR analytique vs Markov (Δ=0.0%)
+
+### Notes de compatibilité API (benchmark uniquement)
+
+- `UncertaintyModel(λ_mean, error_factor=3.0)` — le paramètre `ef` ne correspond pas au nom de l'attribut dans le code source
+- `SystemMonteCarlo(seed=42).run(subsystems=[...])` — initialisation et appel séparés
+- `PSTSolver(p, T_PST=, c_PST=).compute_pfdavg()['pfdavg_with_pst']` — clé de retour explicite
+- `str_analytical(p: SubsystemParams) → dict` — prend un `SubsystemParams` entier, pas 3 arguments séparés
+
+---
+
 ## Planned
 
 ### [0.4.0] — pending external sources
