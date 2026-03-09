@@ -52,10 +52,10 @@ dev = [
 ]
 
 [project.urls]
-Homepage    = "https://github.com/your-org/sil-engine"
-Source      = "https://github.com/your-org/sil-engine"
-"Bug Tracker" = "https://github.com/your-org/sil-engine/issues"
-Documentation = "https://github.com/your-org/sil-engine/tree/main/docs"
+Homepage    = "https://github.com/Myrkh/PRISM_SIL_ENGINE"
+Source      = "https://github.com/Myrkh/PRISM_SIL_ENGINE"
+"Bug Tracker" = "https://github.com/Myrkh/PRISM_SIL_ENGINE/issues"
+Documentation = "https://github.com/Myrkh/PRISM_SIL_ENGINE/tree/main/docs"
 
 [tool.hatch.build.targets.wheel]
 packages = ["sil_engine"]
