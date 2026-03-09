@@ -1,0 +1,72 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[project]
+name = "sil-engine"
+version = "0.3.3"
+description = "Open-source IEC 61508-6 SIL calculation engine — analytical IEC + exact Markov CTMC"
+readme = "README.md"
+license = { text = "LGPL-3.0-or-later" }
+requires-python = ">=3.10"
+
+keywords = [
+    "IEC 61508", "SIL", "functional safety", "PFD", "PFH",
+    "Markov", "SIS", "LOPA", "safety instrumented system",
+    "reliability engineering", "process safety",
+]
+
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Intended Audience :: Science/Research",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: GNU Lesser General Public License v3 (LGPLv3)",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Topic :: Scientific/Engineering",
+    "Topic :: Scientific/Engineering :: Mathematics",
+    "Topic :: Scientific/Engineering :: Physics",
+]
+
+# Runtime: only numpy + scipy
+dependencies = [
+    "numpy>=1.24",
+    "scipy>=1.10",
+]
+
+[project.optional-dependencies]
+# REST API server (optional)
+api = [
+    "fastapi>=0.100",
+    "uvicorn[standard]>=0.20",
+    "pydantic>=2.0",
+]
+# Development & testing
+dev = [
+    "pytest>=7.0",
+    "pytest-cov>=4.0",
+    "ruff>=0.1",
+    "mypy>=1.0",
+]
+
+[project.urls]
+Homepage    = "https://github.com/your-org/sil-engine"
+Source      = "https://github.com/your-org/sil-engine"
+"Bug Tracker" = "https://github.com/your-org/sil-engine/issues"
+Documentation = "https://github.com/your-org/sil-engine/tree/main/docs"
+
+[tool.hatch.build.targets.wheel]
+packages = ["sil_engine"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+addopts = "-v --tb=short"
+
+[tool.ruff]
+line-length = 100
+
+[tool.mypy]
+python_version = "3.10"
+ignore_missing_imports = true
