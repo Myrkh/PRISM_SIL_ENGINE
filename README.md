@@ -6,7 +6,7 @@ The first fully transparent, auditable, validated alternative to GRIF, exSILenti
 [![License: LGPL v3](https://img.shields.io/badge/License-LGPL%20v3-blue.svg)](LICENSE)
 [![Python 3.10+](https://img.shields.io/badge/python-3.10+-blue.svg)](https://python.org)
 [![Validated](https://img.shields.io/badge/IEC%2061508--6-79%20test%20cases-green.svg)](packages/sil-py/tests/)
-[![CI](https://github.com/your-org/sil-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/sil-engine/actions)
+[![CI](https://github.com/Myrkh/sil-engine/actions/workflows/ci.yml/badge.svg)](https://github.com/your-org/sil-engine/actions)
 
 ---
 
