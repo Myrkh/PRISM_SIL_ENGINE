@@ -126,8 +126,11 @@ def str_markov(p: SubsystemParams) -> dict:
                 Q[i, idx[tgt]] += ldd_ccf; Q[i, i] -= ldd_ccf
 
     # Steady state π Q = 0, Σ π = 1
+    # FIX Bug #5 : remplacer la dernière LIGNE (pas colonne) par la contrainte Σ=1.
+    # NTNU Ch.5 slide 38 : "Replace last row of Q^T with [1,1,...,1] and b[-1]=1".
+    # L'ancien code faisait A[:, -1] = 1.0 (colonne) → système incohérent → π non-normalisé.
     A = Q.T.copy()
-    A[:, -1] = 1.0
+    A[-1, :] = 1.0  # dernière LIGNE = contrainte de normalisation
     b = np.zeros(n_states); b[-1] = 1.0
     try:
         pi = np.linalg.solve(A, b)
