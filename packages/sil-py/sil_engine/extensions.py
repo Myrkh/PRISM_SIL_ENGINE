@@ -542,7 +542,20 @@ def route_compute(
 
     if use_markov:
         try:
-            solver = MarkovSolver(p, arch)
+            # FIX Bug #2 : MarkovSolver.__init__(self, p) n'accepte qu'un seul argument.
+            # L'architecture est transmise via SubsystemParams.architecture/.M/.N,
+            # lus par _build_states() et _is_failed(). Construire p_arch en conséquence.
+            # Source : MarkovSolver.__init__ signature + _is_failed() utilisant self.M/self.N.
+            from copy import copy as _copy
+            p_arch = _copy(p)
+            p_arch.architecture = arch
+            if arch and len(arch) >= 3:
+                try:
+                    p_arch.M = int(arch[0])
+                    p_arch.N = int(arch[-1])
+                except (ValueError, IndexError):
+                    pass
+            solver = MarkovSolver(p_arch)
             if mode == "pfd":
                 result = solver.compute_pfdavg()
             else:
