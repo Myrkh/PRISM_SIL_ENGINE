@@ -1,11 +1,14 @@
 """
 IEC 61508-6 Annexe B — Formules analytiques + Corrections académiques.
 
-Sources :
-  - IEC 61508-6:2010 Annexe B (MD 11_IEC_FORMULAS_COMPLETE)
-  - Omeiri, Innal, Liu (2021) JESA 54(6):871-879 — PFH corrigé (MD 22_PFH_CORRECTED)
-  - Rausand & Lundteigen NTNU Ch.9 — PFH exact avec DD (MD 24_MTTFS_PST_PFH_NTNU)
-  - Rausand & Lundteigen NTNU Ch.12 — STR (MD 21_STR_SPURIOUS_TRIP)
+Sources primaires :
+  - IEC 61508-6:2010 Annexe B §B.3.2/B.3.3 — formules PFD/PFH simplifiées
+  - IEC 61508-2:2010 §6.7.4 Table 2 — Safe Failure Fraction (SFF), Route 1H
+  - Omeiri, Innal, Liu (2021) JESA 54(6):871-879 — PFH corrigé terme DU→DD
+  - Rausand & Lundteigen, NTNU RAMS Group, Ch.8 «Calculation of PFH» (v0.1)
+    slides 24-26 (DD inclusion), 28 (CCF), 31 (tCE), 35-37 (Markov)
+  - Uberti M. (2024) «Functional Safety: RBD and Markov for SIS», Politecnico
+    Milano, §3.4 Eq.3.9 (décomposition λ), §3.5 Eq.3.13 (SFF), §6.1 Eq.6.3 (tCE)
 
 Moteur 1 : IEC simplifié — valide pour λ×T1 << 1 (erreur < 1% si λ×T1 < 0.05).
 """
@@ -17,25 +20,86 @@ from typing import Optional
 
 @dataclass
 class SubsystemParams:
-    """Paramètres d'un sous-système SIF."""
+    """
+    Paramètres d'un sous-système SIF.
+
+    Décomposition des taux de défaillance (IEC 61508-2 §3.6, Uberti 2024 Eq.3.9) :
+        λ_total = λ_SD + λ_SU + λ_DD + λ_DU  (+λ_NE ignoré pour la sécurité)
+
+    Défaillances dangereuses (λ_D = λ_DU + λ_DD) :
+        λ_DU  — Dangerous Undetected : latente, révélée au proof test uniquement.
+        λ_DD  — Dangerous Detected   : détectée par diagnostics, EUC mis en sécurité.
+
+    Défaillances sûres (λ_S = λ_SD + λ_SU) :
+        λ_SD  — Safe Detected   : trip immédiat, détecté par diagnostics.
+        λ_SU  — Safe Undetected : latente, révélée au proof test (pattern ≈ DU).
+        λ_S   — Total safe = λ_SD + λ_SU  [rétrocompatibilité : champ legacy].
+
+    CONVENTION : si seul lambda_S est fourni (workflow legacy), les champs
+    lambda_SD et lambda_SU valent 0 et lambda_S est utilisé tel quel pour SFF.
+    Si lambda_SD et/ou lambda_SU sont fournis, lambda_S est recalculé en __post_init__.
+
+    Temps de réparation (Uberti 2024 Eq.6.3, NTNU Ch.8 slide 31) :
+        MTTR     — Mean Time To Repair pour λ_DD (déclenché immédiatement).
+        MTTR_DU  — Mean Repair Time pour λ_DU (réparation après découverte au
+                   proof test). Physiquement distinct de MTTR même si souvent
+                   égal en pratique. Par défaut = MTTR.
+                   [remplace le getattr(p, 'MRT', MTTR) fragile antérieur]
+    """
+    # ── Paramètres obligatoires ────────────────────────────────────────────────
     lambda_DU: float       # Taux défaillance dangereuse non détectée [1/h]
     lambda_DD: float       # Taux défaillance dangereuse détectée [1/h]
-    lambda_S: float = 0.0  # Taux défaillance sécurité [1/h]
-    DC: float = 0.0        # Couverture diagnostique (0-1)
-    beta: float = 0.02     # Facteur CCF DU
-    beta_D: float = 0.01   # Facteur CCF DD
-    MTTR: float = 8.0      # Temps moyen réparation DD [h]
-    T1: float = 8760.0     # Intervalle essai périodique [h]
-    PTC: float = 1.0       # Couverture essai périodique (proof test coverage)
-    T2: float = 87600.0    # Intervalle essai complet si PTC < 1 [h]
+
+    # ── Défaillances sûres — décomposition λSD + λSU (Uberti 2024 §3.4) ───────
+    lambda_S: float = 0.0   # Taux total défaillances sûres = λ_SD + λ_SU [1/h]
+                             # (legacy : valeur directe si λ_SD/λ_SU non renseignés)
+    lambda_SD: float = 0.0  # Safe Detected   — trip immédiat via diagnostics [1/h]
+    lambda_SU: float = 0.0  # Safe Undetected — latente, détectée au proof test [1/h]
+
+    # ── Paramètres diagnostics & architecture ─────────────────────────────────
+    DC: float = 0.0         # Diagnostic Coverage (0–1)
+    beta: float = 0.02      # Facteur CCF pour λ_DU (IEC 61508-6 §B.3.2)
+    beta_D: float = 0.01    # Facteur CCF pour λ_DD
+    MTTR: float = 8.0       # Mean Time To Repair — λ_DD (détections immédiates) [h]
+    MTTR_DU: float = -1.0   # Mean Repair Time — λ_DU (après proof test) [h]
+                             # Convention : -1 → utilise MTTR (identiques par défaut)
+    T1: float = 8760.0      # Intervalle proof test [h]
+    PTC: float = 1.0        # Proof Test Coverage (0–1)
+    T2: float = 87600.0     # Intervalle proof test complet si PTC < 1 [h]
     architecture: str = "1oo1"
-    M: int = 1             # M dans MooN
-    N: int = 1             # N dans MooN
-    # STR parameters (MD 21_STR_SPURIOUS_TRIP — NTNU Ch.12)
-    lambda_SO: float = 0.0   # Taux spurious operation [1/h]
-    beta_SO: float = 0.02    # Facteur CCF pour SO
-    MTTR_SO: float = 8.0     # Temps réparation SO [h]
-    lambda_FD: float = 0.0   # Taux fausses demandes [1/h]
+    M: int = 1              # M dans MooN
+    N: int = 1              # N dans MooN
+
+    # ── STR — Spurious Trip Rate (NTNU Ch.12) ─────────────────────────────────
+    lambda_SO: float = 0.0  # Spurious operation rate total [1/h]
+    beta_SO: float = 0.02   # Facteur CCF pour SO
+    MTTR_SO: float = 8.0    # Temps réparation spurious trip [h]
+    lambda_FD: float = 0.0  # Fausses demandes [1/h]
+
+    def __post_init__(self) -> None:
+        """
+        Cohérence et rétrocompatibilité des paramètres de défaillances sûres
+        et des temps de réparation.
+
+        Règles appliquées :
+          1. λ_S = λ_SD + λ_SU si au moins l'un est fourni (> 0).
+             Sinon λ_S est conservé tel quel (workflow legacy).
+          2. MTTR_DU ← MTTR si MTTR_DU == -1 (sentinel valeur par défaut).
+        """
+        # Règle 1 : cohérence lambda_S / lambda_SD / lambda_SU
+        if self.lambda_SD > 0.0 or self.lambda_SU > 0.0:
+            computed = self.lambda_SD + self.lambda_SU
+            if self.lambda_S > 0.0 and abs(self.lambda_S - computed) > 1e-15:
+                raise ValueError(
+                    f"SubsystemParams: incohérence — lambda_S={self.lambda_S:.3e} "
+                    f"≠ lambda_SD + lambda_SU = {computed:.3e}. "
+                    "Fournissez soit lambda_S seul, soit lambda_SD et lambda_SU."
+                )
+            self.lambda_S = computed
+
+        # Règle 2 : MTTR_DU par défaut = MTTR
+        if self.MTTR_DU < 0.0:
+            self.MTTR_DU = self.MTTR
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -144,27 +208,36 @@ def pfh_1oo1(p: SubsystemParams) -> float:
 
 def pfh_1oo2(p: SubsystemParams) -> float:
     """
-    IEC 61508-6 §B.3.3.2.2 — PFH 1oo2.
+    PFH 1oo2 — IEC 61508-6 §B.3.3.2.2 (hypothèse IEC : DD-dernier → état sûr).
 
-    Source : 11_IEC_FORMULAS_COMPLETE.md §B.3.3.2.2 + NTNU Ch9 slide 31 :
-      PFH_G(1oo2) = 2 × λD_indep × (1-β)λDU × t_CE + β×λDU
+    Formule :
+        PFH_G = 2 × λ_D^(i) × (1-β)λ_DU × t_CE + β×λ_DU
 
-    t_CE = (λDU/λD)×(T1/2+MRT) + (λDD/λD)×MTTR   ← même t_CE que PFD
+    t_CE (Uberti 2024 Eq.6.3, NTNU Ch.8 slide 31) :
+        t_CE = (λ_DU/λ_D)×(T1/2 + MTTR_DU) + (λ_DD/λ_D)×MTTR
 
-    Développé :  PFH = λDU²×T1 + 2×λDU²×MRT + 2×λDU×λDD×MTTR
-    Exclut intentionnellement le terme DU→DD (λDU×λDD×T1) :
-    IEC assume que n-k+1 DD failures → transition vers état sûr.
-    (Source : NTNU Ch9 slide 29 — "DD failure as last = safe state, disregarded")
+    Avec :
+        λ_D^(i) = (1-β_D)λ_DD + (1-β)λ_DU  [taux indépendant total]
+        MTTR_DU = Mean Repair Time pour λ_DU (réparation post-proof-test)
+        MTTR    = Mean Time To Repair pour λ_DD (déclenchement immédiat)
 
-    Note : NTNU slide 26 propose une formule alternative plus conservatrice
-    qui inclut le terme DU→DD. Voir pfh_1oo2_ntnu() si besoin.
+    Hypothèse IEC (NTNU Ch.8 slide 29) :
+        Si la DERNIÈRE défaillance est DD → EUC mis en sécurité → DGF annulé.
+        ⟹ Le terme (λ_DU × λ_DD × T1) est intentionnellement absent.
+
+    NTNU Ch.8 slide 26 (formula plus conservatrice incluant ce terme) :
+        voir pfh_1oo2_ntnu().
+
+    CCF (NTNU Ch.8 slide 28) :
+        β_D×λ_DD omis car double DD → safe state commandé.
+        Seul β×λ_DU contribue.
     """
     ldu = p.lambda_DU * (1 - p.beta)
     ldd = p.lambda_DD * (1 - p.beta_D)
     lD = p.lambda_DU + p.lambda_DD
-    MRT = getattr(p, 'MRT', p.MTTR)
+    mrt_du = p.MTTR_DU   # Mean Repair Time DU — champ explicite (≠ MTTR en général)
     if lD > 0:
-        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + MRT) + (p.lambda_DD / lD) * p.MTTR
+        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + mrt_du) + (p.lambda_DD / lD) * p.MTTR
     else:
         tce = 0.0
     pfh_indep = 2.0 * (ldd + ldu) * ldu * tce
@@ -174,13 +247,22 @@ def pfh_1oo2(p: SubsystemParams) -> float:
 
 def pfh_1oo2_ntnu(p: SubsystemParams) -> float:
     """
-    PFH 1oo2 — Dérivation NTNU Ch9 slides 24-26 (alternative, plus conservatrice).
+    PFH 1oo2 — Dérivation NTNU Ch.8 slides 24-26 (conservatrice, inclut DD→DU).
 
-    PFH = λDU²×τ + λDU×λDD×τ + 2×λDU×λDD×MTTR + β×λDU
+    Formule complète (tous les scénarios DGF — NTNU slide 26) :
+        PFH = λ_DU²×τ + λ_DU×λ_DD×τ + 2×λ_DU×λ_DD×MTTR + β×λ_DU
 
-    Compte TOUS les scénarios DGF (y compris DU→DD), contrairement à IEC.
-    À utiliser si on veut une borne supérieure conservatrice.
-    Source : Rausand & Lundteigen, NTNU RAMS Group Ch9 slides 24-26.
+    Comparaison avec la version IEC (pfh_1oo2) :
+        IEC omet le terme (λ_DU×λ_DD×τ) car hypothèse DD-dernier → safe.
+        Cette version inclut le scénario DU-premier → DD (état critique maintenu).
+
+    Quand utiliser :
+        - Borne supérieure conservatrice (PFH plus élevé).
+        - Éléments finaux mécaniques où DD ≠ toujours safe (ex. : vanne bloquée).
+        - Validation vs exSILentia ou GRIF en mode conservatif.
+
+    Source : Rausand & Lundteigen, NTNU RAMS Group, «Calculation of PFH» Ch.8 (v0.1),
+             slides 24-26 (options a et b combinées, approximation Maple).
     """
     ldu = p.lambda_DU * (1 - p.beta)
     ldd = p.lambda_DD * (1 - p.beta_D)
@@ -196,23 +278,31 @@ def pfh_2oo2(p: SubsystemParams) -> float:
 
 def pfh_2oo3(p: SubsystemParams) -> float:
     """
-    IEC 61508-6 §B.3.3.2.5 — PFH 2oo3.
+    PFH 2oo3 — IEC 61508-6 §B.3.3.2.5 (hypothèse IEC : DD-dernier → état sûr).
 
-    Source : 11_IEC_FORMULAS_COMPLETE.md §B.3.3.2.5 :
-      PFH_G(2oo3) = 6 × [(1-β_D)λ_DD + (1-β)λ_DU] × (1-β)λ_DU × t_CE + β×λ_DU
+    Formule :
+        PFH_G = 6 × λ_D^(i) × (1-β)λ_DU × t_CE + β×λ_DU
 
-    t_CE = (λ_DU/λ_D)×(T1/2+MRT) + (λ_DD/λ_D)×MTTR  (§B.3.2.2)
+    t_CE (Uberti 2024 Eq.6.3, NTNU Ch.8 slide 31) :
+        t_CE = (λ_DU/λ_D)×(T1/2 + MTTR_DU) + (λ_DD/λ_D)×MTTR
 
-    CORRECTION : version précédente utilisait 6×ldu²×T1 (≈ t_CE pour DC=0% seulement).
-    Erreur constatée : +99% à DC=0%, +38% à DC=90%/β=2% (isolé sur cas β=0%).
-    v3.1 : t_CE utilise (T1/2+MRT) conformément à IEC §B.3.2.2.
+    Avec λ_D^(i) = (1-β_D)λ_DD + (1-β)λ_DU.
+
+    Hypothèse IEC (NTNU Ch.8 slide 29) : DD-dernier → safe → terme DU→DD absent.
+    Le terme manquant (Omeiri 2021) est inclus dans pfh_2oo3_corrected().
+
+    CCF (NTNU Ch.8 slide 28) : β_D×λ_DD omis (double DD → safe commandé).
+
+    HISTORIQUE :
+        v3.0 : utilisait 6×ldu²×T1 (approximation valide DC=0% uniquement, +99%).
+        v3.1 : t_CE conforme IEC §B.3.2.2.
     """
     ldu = p.lambda_DU * (1 - p.beta)
     ldd = p.lambda_DD * (1 - p.beta_D)
     lD = p.lambda_DU + p.lambda_DD
-    MRT = getattr(p, 'MRT', p.MTTR)
+    mrt_du = p.MTTR_DU   # Mean Repair Time DU — champ explicite
     if lD > 0:
-        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + MRT) + (p.lambda_DD / lD) * p.MTTR
+        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + mrt_du) + (p.lambda_DD / lD) * p.MTTR
     else:
         tce = 0.0
     pfh_indep = 6.0 * (ldd + ldu) * ldu * tce
@@ -222,25 +312,31 @@ def pfh_2oo3(p: SubsystemParams) -> float:
 
 def pfh_1oo3(p: SubsystemParams) -> float:
     """
-    IEC 61508-6 §B.3.3.2.6 — PFH 1oo3.
+    PFH 1oo3 — IEC 61508-6 §B.3.3.2.6.
 
-    Source : 11_IEC_FORMULAS_COMPLETE.md §B.3.3.2.6 :
-      PFH_G(1oo3) = 6 × [(1-β_D)λ_DD + (1-β)λ_DU]² × (1-β)λ_DU × t_CE × t_GE + β×λ_DU
+    Formule :
+        PFH_G = 6 × [λ_D^(i)]² × (1-β)λ_DU × t_CE × t_GE + β×λ_DU
 
-    t_CE = (λ_DU/λ_D)×(T1/2+MRT) + (λ_DD/λ_D)×MTTR  (§B.3.2.2)
-    t_GE = (λ_DU/λ_D)×(T1/3+MRT) + (λ_DD/λ_D)×MTTR  (§B.3.2.2.2)
+    t_CE = (λ_DU/λ_D)×(T1/2 + MTTR_DU) + (λ_DD/λ_D)×MTTR  [NTNU Ch.8 slide 31]
+    t_GE = (λ_DU/λ_D)×(T1/3 + MTTR_DU) + (λ_DD/λ_D)×MTTR  [IEC §B.3.2.2.2]
 
-    CORRECTION : version précédente utilisait 3×ldu³×T1².
-    Impact pratique masqué par β×λ_DU dès β≥2%, mais formule structurellement fausse.
-    v3.1 : t_CE=(λDU/λD)×(T1/2+MRT)+..., t_GE=(λDU/λD)×(T1/3+MRT)+... (IEC §B.3.2.2)
+    Note sur t_GE : T1/3 car 3 composants — le temps d'exposition moyen d'un
+    composant défaillant dans un groupe de 3 est τ/3 (NTNU Ch.8 slide 32,
+    NTNU slide 34 formule générale kooN avec t_GEi).
+
+    CCF (NTNU Ch.8 slide 28) : seul β×λ_DU inclus.
+
+    HISTORIQUE :
+        v3.0 : utilisait 3×ldu³×T1². Erreur structurelle masquée par β×λ_DU.
+        v3.1 : t_CE et t_GE conformes IEC §B.3.2.2.
     """
     ldu = p.lambda_DU * (1 - p.beta)
     ldd = p.lambda_DD * (1 - p.beta_D)
     lD = p.lambda_DU + p.lambda_DD
-    MRT = getattr(p, 'MRT', p.MTTR)
+    mrt_du = p.MTTR_DU   # Mean Repair Time DU — champ explicite
     if lD > 0:
-        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + MRT) + (p.lambda_DD / lD) * p.MTTR
-        tge = (p.lambda_DU / lD) * (p.T1 / 3.0 + MRT) + (p.lambda_DD / lD) * p.MTTR
+        tce = (p.lambda_DU / lD) * (p.T1 / 2.0 + mrt_du) + (p.lambda_DD / lD) * p.MTTR
+        tge = (p.lambda_DU / lD) * (p.T1 / 3.0 + mrt_du) + (p.lambda_DD / lD) * p.MTTR
     else:
         tce = tge = 0.0
     pfh_indep = 6.0 * (ldd + ldu) ** 2 * ldu * tce * tge
@@ -252,26 +348,27 @@ def pfh_1oo3(p: SubsystemParams) -> float:
 
 def pfh_1oo2_corrected(p: SubsystemParams) -> float:
     """
-    PFH 1oo2 corrigé — Omeiri, Innal, Liu (2021) Eq.17.
+    PFH 1oo2 corrige - Omeiri, Innal, Liu (2021) Eq.17.
     Source : JESA Vol.54 No.6 pp.871-879 (open access iieta.org).
-    
-    Contient le terme DU→DD manquant dans l'IEC 61508.
-    Δ = 2×(1-β)×λ_DU × (T1/2 + MRT) × λ_DD
+
+    Terme manquant IEC : 2*(1-beta)*lDU*(T1/2+MRT)*lDD
+
+    BUG CORRIGE v0.3.4 (Bug #6) : MRT etait p.T1/2.0 au lieu de p.MTTR.
+    Avec T1=8760h, MTTR=8h : resultat etait x2 trop grand.
+    Source : Omeiri 2021 p.875 note : MRT = mean repair time = MTTR.
     """
     ldu = (1 - p.beta) * p.lambda_DU
     ldd = (1 - p.beta_D) * p.lambda_DD
     ld_ind = ldu + ldd
-    MRT = p.T1 / 2.0
+    MRT = p.MTTR   # FIX Bug #6 : MTTR, pas T1/2
 
-    # t_CE1 avec taux indépendants (Omeiri Eq.18)
     if ld_ind > 0:
         t_CE1 = (ldu / ld_ind) * (p.T1 / 2.0 + MRT) + (ldd / ld_ind) * p.MTTR
     else:
         t_CE1 = p.T1 / 2.0
 
-    pfh_main = 2.0 * (ldd + ldu) * t_CE1 * ldu
-    pfh_ccf = p.beta * p.lambda_DU
-    # TERME MANQUANT IEC (Omeiri Eq.17, 3ème terme)
+    pfh_main    = 2.0 * (ldd + ldu) * t_CE1 * ldu
+    pfh_ccf     = p.beta * p.lambda_DU
     pfh_missing = 2.0 * ldu * (p.T1 / 2.0 + MRT) * p.lambda_DD
     return pfh_main + pfh_ccf + pfh_missing
 
@@ -287,7 +384,7 @@ def pfh_2oo3_corrected(p: SubsystemParams) -> float:
     ldu = (1 - p.beta) * p.lambda_DU
     ldd = (1 - p.beta_D) * p.lambda_DD
     ld_ind = ldu + ldd
-    MRT = p.T1 / 2.0
+    MRT = p.MTTR   # FIX Bug #6 : MTTR, pas T1/2
 
     if ld_ind > 0:
         t_CE1 = (ldu / ld_ind) * (p.T1 / 2.0 + MRT) + (ldd / ld_ind) * p.MTTR
@@ -405,10 +502,58 @@ def sil_from_pfh(pfh: float) -> int:
 
 
 def route1h_constraint(p: SubsystemParams, arch: str) -> dict:
-    """Contrainte architecturale Route 1H (IEC 61508-2 §7.4.3.1)."""
+    """
+    Contrainte architecturale SIL max — Route 1H (IEC 61508-2 Table 2).
+
+    Safe Failure Fraction (SFF) — IEC 61508-2 §6.7.4, Uberti 2024 Eq.3.13 :
+
+        SFF = (λ_SD + λ_SU + λ_DD) / (λ_SD + λ_SU + λ_DD + λ_DU)
+            = (λ_S + λ_DD) / (λ_S + λ_DD + λ_DU)
+
+    Avec λ_S = λ_SD + λ_SU (total défaillances sûres).
+    Les défaillances sans effet (λ_NE) sont exclues (Uberti 2024 §3.5 — note).
+
+    Cas particulier électromécanique (Uberti 2024 §3.5, Eq.3.14) :
+        Si λ_S ≈ 0 (composant électromécanique — vannes, relais) :  SFF ≈ DC
+        Un avertissement est émis si λ_S = 0 et DC > 0 pour signaler l'incohérence
+        fréquente : fournir DC sans λ_SD/λ_SU revient à ignorer les défaillances
+        sûres dans le calcul SFF.
+
+    Table de correspondance HFT/SIL (IEC 61508-2 Table 2, composants Type B) :
+        HFT=0 : SFF < 60% → SIL1 max | 60–90% → SIL2 | ≥90% → SIL3
+        HFT=1 : SFF < 60% → SIL2 max | 60–90% → SIL3 | ≥90% → SIL4
+        HFT=2 : SIL4 atteignable quelle que soit la SFF
+
+    Correspondance architecture → HFT (IEC 61508-2 §B.3.3) :
+        1oo1, 2oo2 → HFT=0  (pas de redondance)
+        1oo2, 1oo2D, 2oo3 → HFT=1  (tolérance à 1 panne)
+        1oo3 → HFT=2  (tolérance à 2 pannes)
+
+    Note : Route 2H (données terrain) peut dépasser ces limites mais n'est
+    pas implémentée ici.
+    """
     lambda_D = p.lambda_DU + p.lambda_DD
-    lambda_total = lambda_D + p.lambda_S
+    lambda_total = lambda_D + p.lambda_S   # λ_S = λ_SD + λ_SU via __post_init__
     sff = (p.lambda_S + p.lambda_DD) / lambda_total if lambda_total > 0 else 0.0
+
+    # ── Diagnostic : cas électromécanique SFF ≈ DC ─────────────────────────
+    # (Uberti 2024 §3.5, Eq.3.14 : λ_s ≈ 0 → SFF = λ_DD/λ_D = DC)
+    warnings_sff = []
+    if p.lambda_S == 0.0 and p.DC > 0.0:
+        sff_dc = p.DC  # approximation Uberti Eq.3.14
+        warnings_sff.append(
+            f"AVERTISSEMENT SFF : lambda_S=0 mais DC={p.DC:.1%}. "
+            f"Pour un composant électromécanique, SFF ≈ DC = {sff_dc:.1%} "
+            f"(Uberti 2024 Eq.3.14). Vérifier si lambda_SD et/ou lambda_SU "
+            f"devraient être renseignés. SFF calculé = {sff:.1%}."
+        )
+    if lambda_D == 0.0 and lambda_total > 0.0:
+        warnings_sff.append(
+            "AVERTISSEMENT SFF : lambda_DU = lambda_DD = 0 — "
+            "composant sans défaillance dangereuse. SFF = 1.0 par convention."
+        )
+        sff = 1.0
+
     hft_map = {"1oo1": 0, "2oo2": 0, "1oo2": 1, "1oo2D": 1, "2oo3": 1, "1oo3": 2}
     hft = hft_map.get(arch, 0)
     if hft == 0:
@@ -417,4 +562,60 @@ def route1h_constraint(p: SubsystemParams, arch: str) -> dict:
         sil_max = 2 if sff < 0.60 else (3 if sff < 0.90 else 4)
     else:
         sil_max = 4
-    return {"sff": sff, "hft": hft, "sil_max_arch": sil_max}
+    return {
+        "sff": sff,
+        "hft": hft,
+        "sil_max_arch": sil_max,
+        "lambda_S_total": p.lambda_S,   # = λ_SD + λ_SU
+        "lambda_SD": p.lambda_SD,
+        "lambda_SU": p.lambda_SU,
+        "warnings": warnings_sff,       # liste vide si aucun problème
+    }
+
+
+def pfh_moon(p: SubsystemParams, k: Optional[int] = None, n: Optional[int] = None) -> float:
+    """
+    PFH kooN généralisé — dispatch vers formule exacte si disponible,
+    sinon approximation DC=0% (Uberti 2024 Annexe E, Eq.E.7).
+
+    Paramètres :
+        k : nombre de canaux requis pour succès (défaut : p.M)
+        n : nombre total de canaux (défaut : p.N)
+
+    Architectures avec formule exacte IEC 61508-6 (DC quelconque) :
+        1oo1, 2oo2, 1oo2, 2oo3, 1oo3 → fonctions dédiées
+
+    Architectures génériques (k,n) avec DC=0% uniquement :
+        PFH = C(n, n-k+1) × λ_DU^(n-k+1) × T1^(n-k) + β×λ_DU
+        Source : Uberti 2024 Annexe E Eq.E.7 ; NTNU Ch.8 slide 27.
+        ⚠ VALIDE UNIQUEMENT POUR DC=0% (λ_DD=0).
+        Pour DC>0% avec N>3 : utiliser compute_exact(mode='high_demand')
+        (Markov CTMC exact — markov.py).
+
+    Validation DC=0% : conforme NTNU Ch.8 slide 22 formule C(n,n-k+1)×λDU^(n-k+1)×τ^(n-k)
+    """
+    from math import comb
+    _k = k if k is not None else p.M
+    _n = n if n is not None else p.N
+
+    # Dispatch vers formules exactes pour les architectures connues
+    exact = {(1,1): pfh_1oo1, (2,2): pfh_2oo2,
+             (1,2): pfh_1oo2, (2,3): pfh_2oo3, (1,3): pfh_1oo3}
+    fn = exact.get((_k, _n))
+    if fn:
+        return fn(p)
+
+    # Approximation générique — DC=0% uniquement (Uberti E.7 / NTNU slide 27)
+    if p.lambda_DD > 0.0:
+        import warnings
+        warnings.warn(
+            f"pfh_moon({_k}oo{_n}) : approximation DC=0% utilisée mais lambda_DD="
+            f"{p.lambda_DD:.2e} ≠ 0. Résultat SOUS-ESTIMÉ. "
+            "Utiliser compute_exact(mode='high_demand') pour DC>0% avec N>3.",
+            UserWarning, stacklevel=2
+        )
+    n_fail = _n - _k + 1   # nombre de défaillances nécessaires pour DGF
+    ldu = p.lambda_DU * (1 - p.beta)
+    pfh_indep = comb(_n, n_fail) * (ldu ** n_fail) * (p.T1 ** (n_fail - 1))
+    pfh_ccf = p.beta * p.lambda_DU
+    return pfh_indep + pfh_ccf
