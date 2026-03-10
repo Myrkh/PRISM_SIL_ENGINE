@@ -94,10 +94,95 @@ Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
 
 ---
 
+## [0.3.5] — 2026-03-10 — Markov exact compute_pfh + Bug #6
+
+### Fixed
+
+**Bug #6 — CRITIQUE — `pfh_1oo2_corrected()` et `pfh_2oo3_corrected()` (Omeiri 2021)**
+- `MRT = p.T1 / 2.0` → `MRT = p.MTTR`
+- Le terme `pfh_missing` utilisait T1/2 au lieu de MTTR comme Mean Repair Time.
+- Avec T1=8760h, MTTR=8h : résultat environ ×547 trop grand.
+- Source : Omeiri et al. 2021, JESA 54(6) p.875 — *«MRT = mean repair time ≈ MTTR for repairable systems»*.
+- Impact : correction majeure sur les formules corrigées Omeiri. Les formules IEC standard (pfh_1oo2, pfh_2oo3) n'étaient pas affectées.
+- Résultat : **8/8 cas de validation Markov PASS, Δ_max = 0.2%**.
+
+### Added
+
+**`compute_pfh()` — Markov CTMC exact pour mode haute demande / continu**
+- Calcul PFH par somme des flux vers états dangereux : `PFH = Σ_i π_i × Σ_{j∈Danger} Q[i,j]`
+- Conforme Omeiri et al. 2021 Eq.6, NTNU Ch.8 slide 37 — *«PFH = P₂ × 2λ_D»* (steady-state).
+- Intégré dans `compute_exact(mode='high_demand')` avec basculement automatique si `λ·T1 > 0.1`.
+- Validation : 8 cas de référence couvrant 1oo1, 1oo2, 2oo2, 2oo3, 1oo3 avec β∈{0%, 2%}.
+
+**`ROADMAP.md`** — 19 items priorisés, 4 niveaux (Fondations → Normes → Différenciants → Crédibilité)
+
+---
+
+## [0.4.0] — 2026-03-10 — Refactoring SubsystemParams + documentation sources primaires
+
+### Added
+
+**`SubsystemParams` — décomposition rigoureuse λ_S = λ_SD + λ_SU**
+- Nouveaux champs : `lambda_SD` (Safe Detected), `lambda_SU` (Safe Undetected).
+- Source : Uberti M. (2024) *Functional Safety: RBD and Markov for SIS*, Politecnico Milano, Eq.3.9.
+- Règle de cohérence dans `__post_init__` : si `lambda_SD` ou `lambda_SU` fournis,
+  `lambda_S` est recalculé et une `ValueError` est levée si `lambda_S` est aussi fourni de façon incohérente.
+- Rétrocompatibilité totale : workflow `lambda_S` seul inchangé.
+- Motivation : distinction nécessaire pour STR précis (λ_SU latente vs λ_SD immédiate) et générateur Markov futur.
+
+**`SubsystemParams.MTTR_DU` — temps de réparation explicite pour λ_DU**
+- Nouveau champ `MTTR_DU: float = -1.0` (sentinel → MTTR par défaut via `__post_init__`).
+- Remplace le `getattr(p, 'MRT', p.MTTR)` fragile antérieur dans pfh_1oo2, pfh_2oo3, pfh_1oo3.
+- Source : Uberti 2024 Eq.6.3, NTNU Ch.8 slide 31 — `t_CE = (λDU/λD)×(T1/2 + MRT) + (λDD/λD)×MTTR`.
+- `MTTR_DU` (pour λ_DU, découvert au proof test) est physiquement distinct de `MTTR` (pour λ_DD,
+  déclenchement immédiat) même si identiques en pratique.
+
+**`route1h_constraint()` — résultat enrichi**
+- Retourne maintenant `lambda_S_total`, `lambda_SD`, `lambda_SU` pour reporting détaillé.
+- Docstring complète : formule SFF sourcée (IEC 61508-2 §6.7.4, Uberti 2024 Eq.3.13),
+  Table HFT/SIL (IEC 61508-2 Table 2), correspondance architecture→HFT.
+
+**`docs/SOURCE_ANALYSIS_NTNU_UBERTI.md`** — document d'analyse scientifique des sources primaires
+- Analyse de convergence NTNU Ch.8 (Rausand & Lundteigen) vs Uberti 2024 (Politecnico Milano).
+- Points documentés : décomposition λ, SFF, t_CE, hypothèse IEC DD-dernier, CCF βD omis,
+  formules kooN, méthode Markov steady-state, comparaison RBD vs Markov.
+- Tableau des corrections effectuées avec justification sourcée.
+- Issues priorisées pour v0.5.0.
+
+### Fixed
+
+**`pfh_1oo2()`, `pfh_2oo3()`, `pfh_1oo3()` — MRT → MTTR_DU (API propre)**
+- `getattr(p, 'MRT', p.MTTR)` → `p.MTTR_DU` dans les 3 fonctions.
+- Comportement numérique inchangé (MTTR_DU = MTTR par défaut), API maintenant explicite et testable.
+
+**Toutes fonctions PFH — docstrings refactorisées**
+- Sources primaires citées avec numéro de slide/équation précis.
+- Hypothèses IEC explicitées (DD-dernier → safe, CCF βD omis).
+- Distinction pfh_1oo2 / pfh_1oo2_ntnu / pfh_1oo2_corrected clarifiée.
+
+### Validation
+
+- Tests IEC : **10/14 VALIDÉS ±1% | 4 ACCEPTABLES | 0 ERREURS** (identique v0.3.5 — aucune régression).
+- 8 tests unitaires Sprint 1 : **8/8 PASS** (SubsystemParams cohérence, MTTR_DU, SFF, rétrocompatibilité).
+
+---
+
 ## Planned
 
-### [0.4.0] — pending external sources
-- Weibull λ(t) for mechanical actuators (NTNU Ch5 — source available)
-- PFH 1oo2 corrected (Omeiri/Innal 2021 — access pending)
-- PST with 3 distinct repair times (Innal/Lundteigen RESS 2016 — access pending)
-- PFH 2oo3 corrected (Jin/Lundteigen/Rausand 2013 — access pending)
+### [0.5.0] — Normes et architectures étendues
+- kooN N>3 généralisé — formule NTNU Ch.8 slide 34 corrigée (≠ SIS book §9.59 errata)
+- Architecture 1oo1D diagnostic externe — IEC 62061:2021, IEC DTS 63394
+- PFH transitoire (λ×T1 proche de 1) — intégration ODE matrix exponential
+- λSU/λSD dans générateur Markov (transitions distinctes latent vs immédiat)
+- SFF = DC pour composants électromécaniques (Uberti 2024 Eq.3.14 — validation rapide)
+
+### [0.6.0] — Différenciants
+- Weibull λ(t) pour actionneurs mécaniques
+- Maintenance imparfaite / dégradation PTC
+- Base de données λ intégrée (OREDA/EXIDA)
+- Rapport PDF automatique IEC 61511 §11
+
+### [1.0.0] — Crédibilité externe
+- Validation vs exSILentia/GRIF (50 cas)
+- Publication PyPI + docs Sphinx
+- Paper académique RESS
