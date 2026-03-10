@@ -119,7 +119,7 @@ class MarkovSolver:
         n = len(states)
         idx = {s: i for i, s in enumerate(states)}
         Q = np.zeros((n, n))
-        mu_du = 1.0 / (self.T1 / 2.0 + self.p.MTTR)
+        mu_du = 1.0 / (self.T1 / 2.0 + self.p.MTTR_DU)  # μDU=1/(T1/2+MTTR_DU) — Omeiri 2021 Eq.8, Uberti Eq.6.3, Bug #9 fix v0.4.2
 
         for i, (n_W, n_DU, n_DD) in enumerate(states):
             if n_W > 0:
@@ -372,7 +372,7 @@ def compute_exact(p: SubsystemParams, mode: str = "low_demand") -> dict:
             "sil": sil_from_pfh(pfh),
             "sil_iec": sil_from_pfh(pfh_iec),
             "lambda_T1": lambda_t1,
-            "method": "analytique-corrigée (Omeiri/Innal 2021)",
+            "method": "Markov-CTMC (steady-state, scipy.linalg)",  # pfh_corrected = valeur Omeiri/Innal 2021 (comparaison)
             "mttfs": solver.compute_mttfs(),
             "warnings": warnings,
         }
