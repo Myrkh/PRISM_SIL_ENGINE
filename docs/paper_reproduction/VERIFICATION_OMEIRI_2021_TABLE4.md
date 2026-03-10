@@ -77,12 +77,6 @@ $$PFH_{2oo3} \approx 6\left[(1-\beta_D)\lambda_{DD} + (1-\beta)\lambda_{DU}\righ
 $$+ 6\,(1-\beta)\lambda_{DU}\left[\frac{T_1}{2} + MRT\right](1-\beta_D)\lambda_{DD}$$
 $$+ 3\left((1-\beta_D)\lambda_{DD} \cdot MTTR + (1-\beta)\lambda_{DU}\left[\frac{T_1}{2}+MRT\right]\right)\beta\lambda_{DU}$$
 
-$$
-PFH_{2oo3} \approx 6[(1-\beta_D)\lambda_{DD} + (1-\beta)\lambda_{DU}] t_{CE1}(1-\beta)\lambda_{DU} + \beta\lambda_{DU}
-+ 6(1-\beta)\lambda_{DU}\left[\frac{T_1}{2} + MRT\right](1-\beta_D)\lambda_{DD}
-+ 3((1-\beta_D)\lambda_{DD}MTTR + (1-\beta)\lambda_{DU}[\frac{T_1}{2}+MRT])\beta\lambda_{DU}
-$$
-
 **Quand β = β_D = 0 :** les termes en β s'annulent, ce qui donne :
 
 $$PFH_{2oo3}^{Eq.22} = \underbrace{6(\lambda_{DD}+\lambda_{DU}) \cdot t_{CE} \cdot \lambda_{DU}}_{\text{Terme 1 = IEC}} + \underbrace{6\,\lambda_{DU}\left[\frac{T_1}{2}+MRT\right]\lambda_{DD}}_{\text{Terme 2 = manquant IEC}}$$
