@@ -353,14 +353,19 @@ def pfh_1oo2_corrected(p: SubsystemParams) -> float:
 
     Terme manquant IEC : 2*(1-beta)*lDU*(T1/2+MRT)*lDD
 
-    BUG CORRIGE v0.3.4 (Bug #6) : MRT etait p.T1/2.0 au lieu de p.MTTR.
-    Avec T1=8760h, MTTR=8h : resultat etait x2 trop grand.
-    Source : Omeiri 2021 p.875 note : MRT = mean repair time = MTTR.
+    BUG CORRIGE v0.3.4 (Bug #6) : MRT etait p.T1/2.0 au lieu de p.MTTR_DU.
+    Avec T1=8760h, MTTR=8h : resultat etait x547 trop grand.
+
+    BUG CORRIGE v0.4.2 (Bug #7a) : MRT etait p.MTTR au lieu de p.MTTR_DU.
+    Omeiri 2021 §2.2 définit MRT = Mean Repair Time pour DU (≠ MTTR pour DD).
+    L'ancien commentaire «MRT = MTTR» était une mauvaise lecture de la section 4
+    où MTTR = MRT = 8h sont des PARAMETRES NUMERIQUES, pas une définition.
+    Source : Omeiri 2021 §2.2 p.872 ; Uberti 2024 Eq.6.3 ; NTNU Ch.8 slide 31.
     """
     ldu = (1 - p.beta) * p.lambda_DU
     ldd = (1 - p.beta_D) * p.lambda_DD
     ld_ind = ldu + ldd
-    MRT = p.MTTR   # FIX Bug #6 : MTTR, pas T1/2
+    MRT = p.MTTR_DU   # Mean Repair Time DU (Omeiri 2021 §2.2) ≠ MTTR (pour DD)
 
     if ld_ind > 0:
         t_CE1 = (ldu / ld_ind) * (p.T1 / 2.0 + MRT) + (ldd / ld_ind) * p.MTTR
@@ -384,7 +389,8 @@ def pfh_2oo3_corrected(p: SubsystemParams) -> float:
     ldu = (1 - p.beta) * p.lambda_DU
     ldd = (1 - p.beta_D) * p.lambda_DD
     ld_ind = ldu + ldd
-    MRT = p.MTTR   # FIX Bug #6 : MTTR, pas T1/2
+    MRT = p.MTTR_DU  # Mean Repair Time DU (Omeiri 2021 §2.2) != MTTR (pour DD)
+                     # BUG #7b corrige v0.4.2 : etait p.MTTR (mauvaise lecture Omeiri §4)
 
     if ld_ind > 0:
         t_CE1 = (ldu / ld_ind) * (p.T1 / 2.0 + MRT) + (ldd / ld_ind) * p.MTTR
@@ -393,9 +399,9 @@ def pfh_2oo3_corrected(p: SubsystemParams) -> float:
 
     pfh_main = 6.0 * (ldd + ldu) * t_CE1 * ldu
     pfh_ccf = p.beta * p.lambda_DU
-    # TERME MANQUANT #1 (Omeiri Eq.22 — critique)
+    # TERME MANQUANT #1 (Omeiri 2021 Eq.22, p.876 — critique, sequence DU->DD etat 1->3->7)
     pfh_missing_1 = 6.0 * ldu * (p.T1 / 2.0 + MRT) * ldd
-    # TERME MANQUANT #2 (négligeable mais inclus pour exactitude)
+    # TERME MANQUANT #2 (Omeiri 2021 Eq.22, p.876 — peut etre neglige mais inclus)
     pfh_missing_2 = 3.0 * (ldd * p.MTTR + ldu * (p.T1 / 2.0 + MRT)) * p.beta * p.lambda_DU
     return pfh_main + pfh_ccf + pfh_missing_1 + pfh_missing_2
 
