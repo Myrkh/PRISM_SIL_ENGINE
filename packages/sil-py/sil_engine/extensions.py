@@ -76,7 +76,7 @@ def pfh_moon(p: SubsystemParams, k: int, n: int) -> float:
     lDU   = p.lambda_DU
     lDD   = p.lambda_DD
     lD    = lDU + lDD
-    MRT   = getattr(p, 'MRT', p.MTTR)
+    MRT   = p.MTTR_DU  # Mean Repair Time DU (Omeiri 2021 §2.2, Bug #8a fix v0.4.2)
     beta  = p.beta
     betaD = p.beta_D
 
@@ -262,7 +262,7 @@ def pfd_mgl(p: SubsystemParams, arch: str, mgl: MGLParams) -> float:
     lDU = p.lambda_DU
     lDD = p.lambda_DD
     lD  = lDU + lDD
-    MRT  = getattr(p, 'MRT', p.MTTR)
+    MRT  = p.MTTR_DU  # Mean Repair Time DU (Omeiri 2021 §2.2, Bug #8b fix v0.4.2)
     T1   = p.T1
     MTTR = p.MTTR
 
@@ -612,7 +612,7 @@ def pfd_koon_generic(p: SubsystemParams, k: int, n: int) -> float:
     lDU   = p.lambda_DU
     lDD   = p.lambda_DD
     lD    = lDU + lDD
-    MRT   = getattr(p, 'MRT', p.MTTR)
+    MRT   = p.MTTR_DU  # Mean Repair Time DU (Omeiri 2021 §2.2, Bug #8c fix v0.4.2)
     beta  = p.beta
     betaD = p.beta_D
 
