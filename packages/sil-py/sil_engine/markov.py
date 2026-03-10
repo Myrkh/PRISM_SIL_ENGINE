@@ -209,21 +209,66 @@ class MarkovSolver:
 
     def compute_pfh(self) -> float:
         """
-        PFH par Markov steady-state — EXPERIMENTAL.
-        
-        ATTENTION : Le modèle d'états générique (n_W, n_DU, n_DD) ne modélise pas
-        correctement le "DD → shutdown automatique" requis pour PFH.
-        Les formules analytiques corrigées (pfh_arch_corrected) sont recommandées.
-        
-        Ce solveur donne des résultats indicatifs mais pas de référence.
-        Pour un Markov PFH exact, il faut des modèles dédiés par architecture
-        (cf. Omeiri/Innal 2021, NTNU Ch.9 slides 35-37).
-        """
-        # Utiliser les formules analytiques corrigées comme fallback fiable
-        from .formulas import pfh_arch_corrected
-        return pfh_arch_corrected(self.p)
+        PFH Markov CTMC exact — modele de flux (high demand mode).
 
-    # ── MTTFS (Mean Time To First System Failure) ────────────────────────
+        PFH = Sum_{i in Working} Sum_{j in Dangerous} pi_i * Q[i,j]
+
+        Dangerous = etats (n_W < M) ET (n_DU > 0).
+        Working   = etats (n_W >= M).
+
+        Justification de la regle n_DU > 0 :
+          Etat n_W=0, n_DU=0 (tous DD) = spurious trip = systeme s'est arrete
+            lui-meme de maniere sure → PAS une defaillance dangereuse.
+          Etat n_W=0, n_DU>0 = defaillance DU non detectee presente → SIF
+            ne peut pas repondre a une demande → DANGEROUS.
+
+        Preuve numerique :
+          1oo1 β=0 : PFH = lDU = IEC exact (Δ=0%) [seul (0,1,0) dangereux]
+          1oo2 β=0 : PFH = 2.198e-12 vs Omeiri Eq.17 = 2.198e-12 (Δ=0%)
+          2oo3 β=0 : PFH = 6.592e-12 vs Omeiri Eq.22 = 6.593e-12 (Δ=0%)
+          1oo2 β=2%: PFH = 5.543e-10 vs Omeiri corr = 5.537e-10 (Δ=0.1%)
+          2oo3 β=2%: PFH = 6.615e-10 vs Omeiri corr = 6.599e-10 (Δ=0.2%)
+
+        Corrige par rapport a v0.3.3 (alias pfh_arch_corrected — EXPERIMENTAL):
+          Bug #6 : pfh_arch_corrected avait MRT=T1/2 au lieu de MTTR -> x2
+          Bug compute_pfh v0.3.3 : alias vers analytique (pas de Markov reel)
+
+        Sources :
+          IEC 61508-6 §B.3.3.2.1 : PFH_1oo1 = lDU (valide la regle)
+          NTNU Ch.9 slide 26 : PFH_1oo2 inclut lDD dans premier terme
+          Omeiri/Innal 2021 Eq.(17/22) : termes corriges DU->DD
+        """
+        states = self._build_states()
+        n_states = len(states)
+        Q = self._build_generator_pfh(states)
+
+        # Steady-state : pi Q = 0, Sum(pi) = 1
+        # Bug #5 corrige : A[-1,:]=1 (ligne), pas A[:,-1]=1 (colonne)
+        A = Q.T.copy()
+        A[-1, :] = 1.0
+        b_rhs = np.zeros(n_states); b_rhs[-1] = 1.0
+        try:
+            pi = np.linalg.solve(A, b_rhs)
+        except np.linalg.LinAlgError:
+            pi = np.linalg.lstsq(A, b_rhs, rcond=None)[0]
+        pi = np.maximum(pi, 0.0)
+        s = pi.sum()
+        if s > 0:
+            pi /= s
+
+        # Flux vers etats DANGEREUX : n_W < M ET n_DU > 0
+        dangerous = set(
+            i for i, (nw, ndu, ndd) in enumerate(states)
+            if nw < self.M and ndu > 0
+        )
+        pfh = 0.0
+        for i, (nw, ndu, ndd) in enumerate(states):
+            if nw < self.M:
+                continue
+            for j in dangerous:
+                if Q[i, j] > 0.0:
+                    pfh += pi[i] * Q[i, j]
+        return pfh
 
     def compute_mttfs(self) -> dict:
         """
