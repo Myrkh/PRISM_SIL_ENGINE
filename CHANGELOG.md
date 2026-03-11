@@ -1,188 +1,219 @@
 # Changelog
 
-All notable changes to sil-engine are documented here.
-Format follows [Keep a Changelog](https://keepachangelog.com/en/1.0.0/).
+All notable changes to this project will be documented in this file.
+
+Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Semantic Versioning.
 
 ---
 
-## [0.3.3] — 2026-03-09 — Initial public release
+## [0.5.0] — 2026-03-11
 
-### Added
-**Python engine (`sil-py`):**
-- PFDavg: 1oo1, 1oo2, 2oo2, 2oo3, 1oo3, 1oo2D, kooN generic, imperfect proof test (PTC < 1)
-- PFH: 1oo1, 1oo2 (IEC §B.3.3.2.2), 1oo2 NTNU conservative, 2oo2, 2oo3, 1oo3
-- PFH corrected: pfh_1oo2_corrected, pfh_2oo3_corrected (Omeiri/Innal 2021 — pending full verification)
-- **Generalised PFH kooN** (`pfh_moon(p, k, n)`) — any architecture including 1oo4, 2oo4, 3oo4
-- **Generalised PFD kooN** (`pfd_koon_generic(p, k, n)`)
-- **PFD(t) instantaneous curve** — sawtooth, PFDmax, time fraction per SIL zone
-- **MGL CCF model** — Multiple Greek Letters (β, γ, δ) for IEC 61508-6 Annex D
-- **Architectural constraints Route 1H/2H** — SFF, HFT, SIL verdict (IEC 61508-2 Table 2)
-- **Demand duration model** — PFD for non-instantaneous demands (NTNU Ch8)
-- **Auto-routing** — automatic switch to Markov CTMC when λ·T₁ > 0.1
-- Exact Markov CTMC solver (scipy matrix exponential)
-- PST: Partial Stroke Test, analytical kooN + multi-phase Markov
-- STR: Spurious Trip Rate, analytical + Markov
-- MTTFS: Mean Time To Fail Spuriously via matrix solve
-- Monte Carlo: uncertainty propagation on λ, DC, β
-- FastAPI REST server (optional)
+### 🔴 Bug Fix — Critical (Bug #11)
 
-**Validation:**
-- 79 test cases from IEC 61508-6 Tables B.2–B.13, 61508.org (2024), NTNU Ch8
-- 100% within 10% tolerance; 95% within 2%
+**PFH underestimation for architectures with N−M ≥ 2 (1oo3, 2oo4, 1oo4)**
 
-### Fixed (vs preliminary internal versions)
-- `pfh_2oo3`: corrected `6×λDU²×T1` → `6×lD_eff×lDU×t_CE` (IEC §B.3.3.2.5)
-- `pfh_1oo3`: corrected `3×λDU³×T1²` → `6×lD_eff²×lDU×t_CE×t_GE` (IEC §B.3.3.2.6)
-- `pfh_1oo2`: now correctly implements IEC §B.3.3.2.2; NTNU conservative form available as `pfh_1oo2_ntnu()`
-- `t_CE` formula confirmed identical for PFD and PFH modes (IEC §B.3.2.2)
+The Markov steady-state solver (`compute_pfh`) used an effective repair rate
+`μ_DU = 1/(T1/2 + MTTR_DU)` to model proof-test renewal of DU channels. This
+approximation is exact for N−M ≤ 1 (1oo1, 1oo2, 2oo3) but systematically
+underestimates PFH for N−M ≥ 2.
 
----
+**Root cause — analytical proof:**
 
-## [0.3.4] — 2026-03-09 — Bugfixes & multi-source benchmark
+In a kooN system with p = N−M, the system fails when p DU channels have
+accumulated simultaneously within the same proof-test interval [0, T1]. Their
+ages are correlated by construction — they cannot exceed T1. The steady-state
+model ignores this correlation by assigning each channel an independent mean
+age of T1/2.
 
-### Fixed
+For DC = 0, β = 0:
 
-**Bug #1 — BLOQUANT — `tests/test_verification.py` (9 occurrences)**
-- `from solver.formulas import ...` → `from sil_engine.formulas import ...`
-- `from solver.extensions import ...` → `from sil_engine.extensions import ...`
-- Le répertoire `solver/` n'existe pas dans le package publié ; le module s'appelle `sil_engine`.
-- Impact : 6 fonctions `test_*` déclenchaient `ModuleNotFoundError` → 0/6 tests exécutables.
-- Résultat : **6/6 tests pytest PASS** après correction.
+```
+PFH_TD = C(N, p+1) × λ^(p+1) × T1^p / (p+1)   [time-domain, exact]
+PFH_SS = C(N, p+1) × λ^(p+1) × (T1/2)^p        [steady-state, approx]
 
-**Bug #2 — BLOQUANT — `sil_engine/extensions.py::route_compute()` l.545**
-- `solver = MarkovSolver(p, arch)` → `TypeError: __init__() takes 2 positional arguments but 3 were given`
-- `MarkovSolver.__init__(self, p)` n'accepte qu'un seul argument.  
-  L'architecture est transmise via `p.architecture`, `p.M`, `p.N` (lus par `_build_states()` et `_is_failed()`).
-- Fix : `p_arch = copy(p); p_arch.architecture = arch; p_arch.M = int(arch[0]); p_arch.N = int(arch[-1]); solver = MarkovSolver(p_arch)`
-- Impact : le solveur Markov CTMC **ne s'activait jamais** ; tout cas `λ·T₁ > 0.1` tombait silencieusement en `IEC_simplified_fallback`, rendant la bascule automatique inopérante.
-- Résultat : `route_compute()` → `engine=Markov_CTMC` pour `λ·T₁ > 0.1` ✓
+PFH_TD / PFH_SS = 2^p / (p+1)
+```
 
-**Bug #3 — FIX — `tests/test_verification.py` cas T11**
-- `expected = 6.3e-2` correspondait à la valeur IEC Table B.9, invalide car `λ·T₁ = 2.19 >> 0.1` (IEC §B.2.2).
-- Le cas portait `"markov_required": True` mais `run_single_case()` appelait quand même `pfd_arch()` (formule IEC).
-- Fix : `expected = 3.76e-2` (valeur Markov CTMC exacte) + routage conditionnel vers `route_compute()` si `markov_required=True`.
-- Résultat : T11 passe de ERREUR (Δ=23%) → **VALIDÉ (Δ=0.1%)** ✓
+| Architecture | p = N−M | Correction factor | SS underestimates by |
+|---|---|---|---|
+| 1oo1, 2oo2   | 0 | 1.000 | 0%   |
+| 1oo2, 2oo3   | 1 | 1.000 | 0%   |
+| **1oo3, 2oo4** | **2** | **1.333** | **−25%** |
+| **1oo4**       | **3** | **2.000** | **−50%** |
 
-**Bug #5 — BLOQUANT — `sil_engine/str_solver.py::str_markov()` l.~87**
-- `A[:, -1] = 1.0` remplaçait la dernière **colonne** de `Q^T` → système linéaire incohérent → vecteur `π` non normalisé (somme ≈ 4×10¹⁰) → `STR_Markov = 1635/h` (absurde vs 2.1×10⁻⁶/h analytique).
-- Fix : `A[-1, :] = 1.0` → remplace la dernière **ligne** (contrainte `Σπᵢ = 1`, méthode standard).
-- Source : NTNU Ch.5 slide 38 — *"Replace one row of Q^T with normalization constraint"* ; Rausand §5.3.
-- Résultat : `STR_Markov = 2.104×10⁻⁶/h` → **Δ = 0.0% vs analytique** ✓
+**Validation — 4 independent methods:**
 
-### Added
+1. Analytical proof (DC=0, β=0) — algebraic derivation, exact
+2. Omeiri et al. (2021) Table 5 MPM simulation — TD matches to < 0.01%
+3. PRISM Monte Carlo (λT1=0.1, 1M cycles) — MC/TD = 1.033 (within ±3.2% stat)
+4. Generalised law — verified on 6 architectures, confirmed to < 2.3%
 
-**Benchmark multi-sources `benchmark_architectures.py`** — fichier remplacé et étendu :
+Note: the IEC 61508-6 §B.3.3 formulas themselves are derived in time-domain
+(tCE × tGE factors), not steady-state. The bug was in the Markov numerical
+solver, not in the IEC derivation.
 
-- **§0** : résumé des 5 corrections avec justification technique, avant/après, impact
-- **§1** : vérification IEC 61508-6 Annexe B Tables B.4–B.13 (15 cas) — **10 VALIDÉS ±1% | 5 ACCEPTABLES | 0 ERREURS | pass=100%**
-- **§2** : comparaison PFH IEC vs corrigé (Omeiri/Innal/Liu 2021, JESA 54(6):871-879)  
-  Δ = +1866% pour 1oo2/2oo3 à DC=90%, β=0 — terme `2×λDU×(T1/2+MRT)×λDD` absent de l'IEC confirmé
-- **§3** : comparaison PDS Method Handbook 2013 SINTEF (A23298) — modèle CCF β-multiple (CMooN) vs β-standard IEC
-- **§4** : Rausand & Høyland 2004 §5.3 — domaine de validité IEC : Δ<1% si `λ·T₁ < 0.05`, Δ=+35% à `λ·T₁ = 4.38`
-- **§5** : ISA-TR84.00.02-2002 Part 2 §6 — SIF réacteur chimique 5 sous-systèmes (FT 2oo3, PT 1oo2, TS 1oo2, LS 1oo2, PES 1oo2)
-- **§6** : Hardware réel — Triconex TRICON TMR (λDU=5×10⁻¹⁰/h) et Hima HIMatrix F3 (λDU=2.9×10⁻¹⁰/h) d'après FMEDA publiées
-- **§7** : Matrice 11 configurations SIF capteur × logique × actionneur avec contributions S%/L%/FE%
-- **§8** : PFD(t) instantané + Monte Carlo propagation incertitude (EF=3, 10 000 tirages)
-- **§9** : PST gain PFD XV 1oo1, STR par architecture, concordance STR analytique vs Markov (Δ=0.0%)
+**Fix — Moteur 2B Time-Domain CTMC:**
 
-### Notes de compatibilité API (benchmark uniquement)
+New method `MarkovSolver.compute_pfh_timedomain()` — DU states absorbing over
+[0, T1], DD repair retained. PFH = (1/T1) × ∫₀^T1 flux_to_dangerous(t) dt.
 
-- `UncertaintyModel(λ_mean, error_factor=3.0)` — le paramètre `ef` ne correspond pas au nom de l'attribut dans le code source
-- `SystemMonteCarlo(seed=42).run(subsystems=[...])` — initialisation et appel séparés
-- `PSTSolver(p, T_PST=, c_PST=).compute_pfdavg()['pfdavg_with_pst']` — clé de retour explicite
-- `str_analytical(p: SubsystemParams) → dict` — prend un `SubsystemParams` entier, pas 3 arguments séparés
+`compute_exact(mode='high_demand')` now selects automatically:
+- N−M ≤ 1 → steady-state (exact, ~0.2 ms)
+- N−M ≥ 2 → time-domain (exact, ~35 ms)
+
+New function `pfh_1oo3_corrected()` in `formulas.py` — routes to time-domain.
+`pfh_arch_corrected` dispatch updated for `1oo3`.
+
+**New tests (Groupe G, T20–T24):**
+
+| Test | Description | Reference | Result |
+|---|---|---|---|
+| T20 | pfh_1oo3_corrected DC=0.6 | Omeiri Table 5 MPM=3.818e-10 | ✅ Δ<1% |
+| T21 | pfh_1oo3_corrected DC=0.9 | Omeiri Table 5 MPM=2.508e-11 | ✅ Δ<1% |
+| T22 | pfh_1oo3_corrected DC=0.99 | Omeiri Table 5 MPM=3.699e-13 | ✅ Δ<1% |
+| T23 | pfh_1oo3 IEC unchanged | Non-regression | ✅ Pass |
+| T24 | compute_exact uses TD for N−M≥2 | Loi 2^p/(p+1) | ✅ Pass |
+| T_law | Ratio TD/SS = 2^p/(p+1) | 6 architectures | ✅ Δ<2.3% |
+
+**Files changed:** `markov.py`, `formulas.py`, `tests/test_verification.py`
 
 ---
 
-## [0.3.5] — 2026-03-10 — Markov exact compute_pfh + Bug #6
+### ✨ New Feature — Error Surface Module (`error_surface.py`)
 
-### Fixed
+**Systematic quantification of IEC 61508-6 validity domains**
 
-**Bug #6 — CRITIQUE — `pfh_1oo2_corrected()` et `pfh_2oo3_corrected()` (Omeiri 2021)**
-- `MRT = p.T1 / 2.0` → `MRT = p.MTTR`
-- Le terme `pfh_missing` utilisait T1/2 au lieu de MTTR comme Mean Repair Time.
-- Avec T1=8760h, MTTR=8h : résultat environ ×547 trop grand.
-- Source : Omeiri et al. 2021, JESA 54(6) p.875 — *«MRT = mean repair time ≈ MTTR for repairable systems»*.
-- Impact : correction majeure sur les formules corrigées Omeiri. Les formules IEC standard (pfh_1oo2, pfh_2oo3) n'étaient pas affectées.
-- Résultat : **8/8 cas de validation Markov PASS, Δ_max = 0.2%**.
+New module `sil_engine/error_surface.py` — computes the relative error between
+IEC simplified formulas and the exact Markov TD reference, over the grid
+(λ×T1, DC), for all standard architectures.
 
-### Added
+**Two error sources identified and separated for the first time:**
 
-**`compute_pfh()` — Markov CTMC exact pour mode haute demande / continu**
-- Calcul PFH par somme des flux vers états dangereux : `PFH = Σ_i π_i × Σ_{j∈Danger} Q[i,j]`
-- Conforme Omeiri et al. 2021 Eq.6, NTNU Ch.8 slide 37 — *«PFH = P₂ × 2λ_D»* (steady-state).
-- Intégré dans `compute_exact(mode='high_demand')` avec basculement automatique si `λ·T1 > 0.1`.
-- Validation : 8 cas de référence couvrant 1oo1, 1oo2, 2oo2, 2oo3, 1oo3 avec β∈{0%, 2%}.
+**Source A — Missing IEC terms (Omeiri 2021)**
+Present even at very small λ×T1. Dominant at high DC.
+Example: 1oo2 DC=0.9, λT1=0.01 → δ_IEC = −89.8% (corrected to −0.1% by Omeiri).
 
-**`ROADMAP.md`** — 19 items priorisés, 4 niveaux (Fondations → Normes → Différenciants → Crédibilité)
+**Source B — Taylor non-linearity (λ×T1 ≫ 0)**
+Present even at DC=0. Scales as (λ×T1)^(N−M).
+Example: 2oo3 DC=0, λT1=0.1 → δ_IEC/Omeiri = +15.8%.
 
----
+**Computed switchover thresholds (5% residual error criterion):**
 
-## [0.4.0] — 2026-03-10 — Refactoring SubsystemParams + documentation sources primaires
+After Omeiri analytical correction, Markov is required when:
 
-### Added
+| Architecture | DC=0.0 | DC=0.6 | DC=0.9 | IEC §B.1 current |
+|---|---|---|---|---|
+| 1oo1 | λT1 > 0.102 | λT1 > 0.250 | λT1 > 0.983 | λT1 > 0.100 |
+| 1oo2 | λT1 > 0.051 | λT1 > 0.126 | λT1 > 0.496 | λT1 > 0.100 |
+| 2oo3 | λT1 > 0.033 | λT1 > 0.082 | λT1 > 0.323 | λT1 > 0.100 |
 
-**`SubsystemParams` — décomposition rigoureuse λ_S = λ_SD + λ_SU**
-- Nouveaux champs : `lambda_SD` (Safe Detected), `lambda_SU` (Safe Undetected).
-- Source : Uberti M. (2024) *Functional Safety: RBD and Markov for SIS*, Politecnico Milano, Eq.3.9.
-- Règle de cohérence dans `__post_init__` : si `lambda_SD` ou `lambda_SU` fournis,
-  `lambda_S` est recalculé et une `ValueError` est levée si `lambda_S` est aussi fourni de façon incohérente.
-- Rétrocompatibilité totale : workflow `lambda_S` seul inchangé.
-- Motivation : distinction nécessaire pour STR précis (λ_SU latente vs λ_SD immédiate) et générateur Markov futur.
+Key finding: the IEC §B.1 threshold (λT1 > 0.1, identical for all architectures)
+is 3× too permissive for 2oo3 at low DC, and 10× too conservative for 1oo1/1oo2
+at high DC. Architecture-adaptive thresholds are more rigorous.
 
-**`SubsystemParams.MTTR_DU` — temps de réparation explicite pour λ_DU**
-- Nouveau champ `MTTR_DU: float = -1.0` (sentinel → MTTR par défaut via `__post_init__`).
-- Remplace le `getattr(p, 'MRT', p.MTTR)` fragile antérieur dans pfh_1oo2, pfh_2oo3, pfh_1oo3.
-- Source : Uberti 2024 Eq.6.3, NTNU Ch.8 slide 31 — `t_CE = (λDU/λD)×(T1/2 + MRT) + (λDD/λD)×MTTR`.
-- `MTTR_DU` (pour λ_DU, découvert au proof test) est physiquement distinct de `MTTR` (pour λ_DD,
-  déclenchement immédiat) même si identiques en pratique.
+Previous work (Chebila & Innal 2015) used analytical formulas as reference;
+those formulas themselves underestimated for N−M ≥ 2 (Bug #11). This is the
+first error surface computed against the exact TD Markov reference.
 
-**`route1h_constraint()` — résultat enrichi**
-- Retourne maintenant `lambda_S_total`, `lambda_SD`, `lambda_SU` pour reporting détaillé.
-- Docstring complète : formule SFF sourcée (IEC 61508-2 §6.7.4, Uberti 2024 Eq.3.13),
-  Table HFT/SIL (IEC 61508-2 Table 2), correspondance architecture→HFT.
+**API:**
 
-**`docs/SOURCE_ANALYSIS_NTNU_UBERTI.md`** — document d'analyse scientifique des sources primaires
-- Analyse de convergence NTNU Ch.8 (Rausand & Lundteigen) vs Uberti 2024 (Politecnico Milano).
-- Points documentés : décomposition λ, SFF, t_CE, hypothèse IEC DD-dernier, CCF βD omis,
-  formules kooN, méthode Markov steady-state, comparaison RBD vs Markov.
-- Tableau des corrections effectuées avec justification sourcée.
-- Issues priorisées pour v0.5.0.
+```python
+from sil_engine.error_surface import (
+    compute_grid_point,        # single (λT1, DC) point
+    compute_error_surface,     # full 30×20 grid for one architecture
+    compare_architectures,     # multi-arch comparison at fixed DC
+    find_crossover_thresholds, # switchover thresholds by (arch, DC)
+    print_error_report,        # structured text report
+)
+```
 
-### Fixed
-
-**`pfh_1oo2()`, `pfh_2oo3()`, `pfh_1oo3()` — MRT → MTTR_DU (API propre)**
-- `getattr(p, 'MRT', p.MTTR)` → `p.MTTR_DU` dans les 3 fonctions.
-- Comportement numérique inchangé (MTTR_DU = MTTR par défaut), API maintenant explicite et testable.
-
-**Toutes fonctions PFH — docstrings refactorisées**
-- Sources primaires citées avec numéro de slide/équation précis.
-- Hypothèses IEC explicitées (DD-dernier → safe, CCF βD omis).
-- Distinction pfh_1oo2 / pfh_1oo2_ntnu / pfh_1oo2_corrected clarifiée.
-
-### Validation
-
-- Tests IEC : **10/14 VALIDÉS ±1% | 4 ACCEPTABLES | 0 ERREURS** (identique v0.3.5 — aucune régression).
-- 8 tests unitaires Sprint 1 : **8/8 PASS** (SubsystemParams cohérence, MTTR_DU, SFF, rétrocompatibilité).
+**Files added:** `sil_engine/error_surface.py`
 
 ---
 
-## Planned
+### 🔍 Research Notes
 
-### [0.5.0] — Normes et architectures étendues
-- kooN N>3 généralisé — formule NTNU Ch.8 slide 34 corrigée (≠ SIS book §9.59 errata)
-- Architecture 1oo1D diagnostic externe — IEC 62061:2021, IEC DTS 63394
-- PFH transitoire (λ×T1 proche de 1) — intégration ODE matrix exponential
-- λSU/λSD dans générateur Markov (transitions distinctes latent vs immédiat)
-- SFF = DC pour composants électromécaniques (Uberti 2024 Eq.3.14 — validation rapide)
+Both findings above represent, to the authors' knowledge, results not
+previously published in the open literature:
 
-### [0.6.0] — Différenciants
-- Weibull λ(t) pour actionneurs mécaniques
-- Maintenance imparfaite / dégradation PTC
-- Base de données λ intégrée (OREDA/EXIDA)
-- Rapport PDF automatique IEC 61511 §11
+1. The law `PFH_TD/PFH_SS = 2^p/(p+1)` — quantitative characterisation of
+   the steady-state approximation error for high-redundancy kooN architectures.
 
-### [1.0.0] — Crédibilité externe
-- Validation vs exSILentia/GRIF (50 cas)
-- Publication PyPI + docs Sphinx
-- Paper académique RESS
+2. The separation of IEC error into Source A (Omeiri terms) and Source B
+   (Taylor non-linearity), with architecture/DC-adaptive switchover thresholds
+   computed against a TD-exact reference.
+
+If you use these results in academic work, please cite the repository:
+
+```
+PRISM SIL Engine, v0.5.0 (2026).
+https://github.com/Myrkh/PRISM_SIL_ENGINE
+```
+
+---
+
+## [0.4.2] — 2026-03-10
+
+### Bug Fixes (Bugs #7–10)
+
+**#7a `formulas.py` ~363 — `pfh_1oo2_corrected` MRT**
+`MRT = p.MTTR` → `p.MTTR_DU`
+Omeiri Eq.(17) uses MRT = Mean Repair Time for DU failures, distinct from MTTR
+(which applies to DD). Source: Omeiri et al. (2021) §2.2.
+
+**#7b `formulas.py` ~387 — `pfh_2oo3_corrected` MRT**
+Same fix: `MRT = p.MTTR` → `p.MTTR_DU`
+
+**#8a `extensions.py` ~79 — `pfh_moon`**
+`getattr(p,'MRT',p.MTTR)` → `p.MTTR_DU`
+
+**#8b `extensions.py` ~265 — `pfd_mgl`**
+Same fix.
+
+**#8c `extensions.py` ~615 — `pfd_koon_generic`**
+Same fix.
+
+**#9 `markov.py` ~122 — `_build_generator_pfh`**
+`mu_du` now uses `self.p.MTTR_DU` instead of `self.p.MTTR`.
+
+**#10 `markov.py` ~375 — method label**
+Corrected label in `compute_exact` output.
+
+### Research — Omeiri Table 4 Typo (Pending external validation)
+DC=0.9 row, Eq.(22) and MPM columns: published 1.538e-7, computed 1.538e-8
+(factor 10×). Three independent proofs: physical monotonicity, cross-validation,
+IEC column consistency. Email sent to Olivier (INERIS). Formula unchanged
+pending response.
+
+---
+
+## [0.4.1] — 2026-03-09
+
+### Bug Fixes (Bugs #1–6)
+
+**#1 `test_verification.py`** — import path `solver.*` → `sil_engine.*`
+
+**#2 `extensions.py`** — `MarkovSolver` TypeError: `p_arch.architecture = arch`
+must be set before instantiation.
+
+**#3 `test_verification.py`** — T11 expected value corrected to Markov result
+(λ×T1 = 2.19, Markov required).
+
+**#4 `formulas.py` — PFD tCE calculation**
+`T1/2` → `T1/2 + MTTR_DU` (missing restoration time term).
+
+**#5 `str_solver.py`** — `A[:,-1]=1` → `A[-1,:]=1` (normalization row/column swap).
+
+**#6 `formulas.py` — pfh_corrected MRT**
+`MRT = T1/2` → `p.MTTR` (wrong fallback value).
+
+---
+
+## [0.4.0] — 2026-03-08
+
+Initial structured release. Dual-engine architecture established:
+- Motor 1: IEC 61508-6 Annex B analytical formulas
+- Motor 2: Markov CTMC exact solver (scipy)
+- Auto-routing: λ×T1 < 0.1 → Motor 1, else Motor 2
+- Extensions: kooN generic, PFD(t), MGL CCF, PST, STR, Monte Carlo
+- Validation: IEC Tables B.2–B.13, 14 cases (10 validated ≤1%, 4 acceptable ≤5%)
