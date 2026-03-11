@@ -415,11 +415,56 @@ def pfh_arch(p: SubsystemParams, arch: Optional[str] = None) -> float:
     return fn(p)
 
 
+def pfh_1oo3_corrected(p: SubsystemParams) -> float:
+    """
+    PFH 1oo3 exact — Moteur 2B Time-Domain CTMC (PRISM v0.5.0, Bug #11).
+
+    POURQUOI une formule analytique (comme Omeiri Eq.27) ne suffit pas :
+    ─────────────────────────────────────────────────────────────────────
+    Pour 1oo2 et 2oo3 (N-M=1), le terme manquant IEC est un produit λ_DU × λ_DD
+    d'ordre 2, addable à la formule IEC existante (Omeiri 2021 Eq.17, Eq.22).
+
+    Pour 1oo3 (N-M=2), l'erreur est structurellement différente :
+    Le steady-state Markov modélise μ_DU = 2/T1 (renouvellement moyen),
+    ce qui est valide pour l'ordre 1 (N-M=1) mais INCORRECT pour l'ordre 2+.
+    L'accumulation de 2 canaux DU simultanément suit une distribution triangulaire
+    sur [0,T1]², et la correction n'est pas un simple terme additif mais un
+    changement du modèle d'accumulation.
+
+    Preuve numérique (PRISM v0.5.0 §Bug#11) :
+        PFH_SS / PFH_exact = 2^p/(p+1) avec p = N-M
+        p=2 → ratio = 4/3 : SS sous-estime de 25% pour tout DC ∈ [0,1]
+        Validation : Time-Domain = Table 5 Omeiri 2021 (MPM) à < 0.01%
+
+    MÉTHODE : CTMC avec DU absorbant sur [0, T1]
+    ─────────────────────────────────────────────
+    Les canaux DU s'accumulent sans restauration intermédiaire (proof test en fin
+    de période). La réparation DD (μ_DD=1/MTTR) est conservée.
+    PFH = (1/T1) × ∫₀^T₁ flux(t→états_dangereux) dt
+
+    Sources :
+        Omeiri, Innal, Liu (2021) JESA 54(6):871-879 — Table 5 (β=0, DC=0.6/0.9/0.99)
+        NTNU Ch.8 §PFH calculation — flux moyen vers états dangereux
+        PRISM v0.5.0 Bug #11 — loi 2^p/(p+1) démontrée analytiquement
+        PRISM v0.5.0 Bug #11 — TD = MPM Omeiri à 0.01% (validation)
+
+    Performance : ~35ms (intégration ODE Radau + quadrature).
+    Pour calculs batch (Sprint B), utiliser pfh_1oo3 + facteur ×4/3 comme borne.
+    """
+    from sil_engine.markov import MarkovSolver
+    import copy
+    p3 = copy.copy(p)
+    p3.architecture = "1oo3"
+    p3.N = 3
+    p3.M = 1
+    return MarkovSolver(p3).compute_pfh_timedomain()
+
+
 def pfh_arch_corrected(p: SubsystemParams, arch: Optional[str] = None) -> float:
-    """Dispatch PFH corrigé (Omeiri/Innal 2021 + NTNU Ch.9)."""
+    """Dispatch PFH corrigé (Omeiri/Innal 2021 + NTNU Ch.9 + PRISM Bug#11)."""
     a = arch or p.architecture
     dispatch = {"1oo1": pfh_1oo1, "1oo2": pfh_1oo2_corrected,
-                "2oo2": pfh_2oo2, "2oo3": pfh_2oo3_corrected, "1oo3": pfh_1oo3}
+                "2oo2": pfh_2oo2, "2oo3": pfh_2oo3_corrected, "1oo3": pfh_1oo3_corrected}
     fn = dispatch.get(a, pfh_1oo1)
     return fn(p)
 
