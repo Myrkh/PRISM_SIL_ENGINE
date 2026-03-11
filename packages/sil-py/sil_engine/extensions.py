@@ -511,71 +511,121 @@ def pfd_demand_duration(
 def route_compute(
     p: SubsystemParams,
     arch: str,
-    mode: str = "pfd",  # "pfd" ou "pfh"
+    mode: str = "pfd",   # "pfd" ou "pfh"
     force_markov: bool = False,
 ) -> dict:
     """
-    Routage automatique : IEC simplifié ou Markov exact selon λ×T1.
-    Source : 19_UI_INTEGRATION.md §"Principe de déclenchement" + markov_required().
+    Routage automatique : formule Omeiri corrigée ou Markov TD exact.
 
-    Critère de bascule :
-      λD × T1 > 0.1 → Markov requis (approximation IEC invalide)
-      SIL cible ≥ 3  → Markov recommandé (précision critique)
-      force_markov   → toujours Markov
+    CORRECTION v0.5.0 Sprint D.5 — trois bugs corrigés :
+
+    Bug A (formule IEC brute) :
+        Avant : mode pfh utilisait pfh_arch() = IEC standard.
+        Pour DC=0.9, λT1=0.07 : erreur Source A = −89.8%.
+        Après : utilise pfh_arch_corrected() = Omeiri corrigé.
+        Erreur résiduelle : +0.7% (Source B uniquement).
+        Source : Omeiri, Innal, Liu (2021) JESA 54(6) — corrections Source A.
+
+    Bug B (Bug #11 hérité) :
+        Avant : chemin Markov appelait solver.compute_pfh() = SS.
+        Pour 1oo3 : sous-estimation −25% (loi 2^p/(p+1), p=2).
+        Après : appelle compute_exact() qui sélectionne TD pour N-M≥2.
+        Source : PRISM v0.5.0 Bug #11 — loi TD/SS = 2^p/(p+1).
+
+    Bug C (seuil empirique λT1 > 0.1 unique) :
+        Avant : seuil 0.1 identique pour toutes architectures et DC.
+        Trop permissif pour 2oo3 DC=0 (Source B = 7.7% dès λT1=0.05).
+        Trop conservatif pour 1oo1 DC=0.9 (erreur 2.5% à λT1=0.5).
+        Après : adaptive_iec_threshold(arch, DC) interpolé par morceaux.
+        Source : PRISM v0.5.0 Sprint D — table THRESHOLDS_OMEIRI_5PCT.
+
+    Logique de routage (mode pfh) :
+        λT1 ≤ seuil(arch, DC) → Omeiri corrigé [rapide, ~0.01 ms]
+        λT1 > seuil(arch, DC) → Markov TD exact [précis, ~35 ms pour 1oo3]
+        1oo3 → toujours Omeiri/TD (pfh_1oo3_corrected = TD, seuil = ∞)
+
+    Logique de routage (mode pfd) :
+        Inchangée — formules PFD n'ont pas de correction Omeiri spécifique.
 
     Retourne :
-      engine_used : "IEC_simplified" ou "Markov_CTMC"
-      result      : valeur PFD ou PFH
-      warning     : message si bascule forcée
+        result          : valeur PFD ou PFH
+        engine_used     : "IEC_Omeiri_corrected" | "Markov_CTMC_TD" | fallback
+        lambda_T1       : produit λD × T1
+        threshold_used  : seuil adaptatif utilisé pour la décision
+        markov_triggered: True si Markov déclenché
+        warning         : message si bascule forcée ou anomalie
     """
-    from .formulas import markov_required
-    from .markov import MarkovSolver
+    from .formulas import lambda_T1_product, pfh_arch_corrected
+    from .error_surface import adaptive_iec_threshold
+    from .markov import compute_exact
 
     lD   = p.lambda_DU + p.lambda_DD
     lT1  = lD * p.T1
-    use_markov = force_markov or lT1 > 0.1
+    DC_eff = (p.lambda_DD / lD) if lD > 0 else 0.0
+
+    # FIX Bug #2 (conservé) : construire p_arch avec architecture/M/N corrects
+    from copy import copy as _copy
+    p_arch = _copy(p)
+    p_arch.architecture = arch
+    if arch and len(arch) >= 3:
+        try:
+            p_arch.M = int(arch[0])
+            p_arch.N = int(arch[-1])
+        except (ValueError, IndexError):
+            pass
+
+    # Seuil adaptatif (Bug C fix)
+    try:
+        threshold = adaptive_iec_threshold(arch, DC_eff)
+    except Exception:
+        threshold = 0.1  # fallback conservatif
+
+    # FIX Bug A : critère de bascule sur le seuil Omeiri vs TD (Source B)
+    use_markov = force_markov or (lT1 > threshold and threshold < float("inf"))
 
     warning = None
-    if lT1 > 0.1 and not force_markov:
-        warning = (f"λD×T1 = {lT1:.3f} > 0.1 → approximation IEC invalide. "
-                   f"Basculement automatique vers Markov CTMC.")
+    if use_markov and not force_markov:
+        warning = (
+            f"λD×T1 = {lT1:.3f} > seuil({arch}, DC={DC_eff:.2f}) = {threshold:.4f} "
+            f"→ erreur résiduelle Omeiri > 5%. Basculement vers Markov TD."
+        )
+    elif force_markov:
+        warning = f"Markov forcé par l'appelant (force_markov=True)."
 
     if use_markov:
         try:
-            # FIX Bug #2 : MarkovSolver.__init__(self, p) n'accepte qu'un seul argument.
-            # L'architecture est transmise via SubsystemParams.architecture/.M/.N,
-            # lus par _build_states() et _is_failed(). Construire p_arch en conséquence.
-            # Source : MarkovSolver.__init__ signature + _is_failed() utilisant self.M/self.N.
-            from copy import copy as _copy
-            p_arch = _copy(p)
-            p_arch.architecture = arch
-            if arch and len(arch) >= 3:
-                try:
-                    p_arch.M = int(arch[0])
-                    p_arch.N = int(arch[-1])
-                except (ValueError, IndexError):
-                    pass
-            solver = MarkovSolver(p_arch)
             if mode == "pfd":
+                # PFD : Markov CTMC exact (SS, exact pour PFD)
+                from .markov import MarkovSolver
+                solver = MarkovSolver(p_arch)
                 result = solver.compute_pfdavg()
+                engine = "Markov_CTMC_SS"
             else:
-                result = solver.compute_pfh()
-            engine = "Markov_CTMC"
+                # FIX Bug B : compute_exact sélectionne TD pour N-M≥2
+                r = compute_exact(p_arch, mode="high_demand")
+                result = r["pfh"]
+                engine = f"Markov_CTMC_TD" if "time-domain" in r.get("method", "") else "Markov_CTMC_SS"
         except Exception as e:
-            # Fallback IEC en cas d'erreur Markov
-            warning = (warning or "") + f" [Markov error: {e}] Fallback IEC."
-            result = pfd_arch(p, arch) if mode == "pfd" else pfh_arch(p, arch)
-            engine = "IEC_simplified_fallback"
+            # Fallback IEC corrigé en cas d'erreur Markov
+            warning = (warning or "") + f" [Markov error: {e}] Fallback Omeiri."
+            result = pfd_arch(p, arch) if mode == "pfd" else pfh_arch_corrected(p_arch)
+            engine = "IEC_Omeiri_corrected_fallback"
     else:
-        result = pfd_arch(p, arch) if mode == "pfd" else pfh_arch(p, arch)
-        engine = "IEC_simplified"
+        # FIX Bug A : Omeiri corrigé au lieu de IEC brut
+        if mode == "pfd":
+            result = pfd_arch(p, arch)
+            engine = "IEC_simplified"
+        else:
+            result = pfh_arch_corrected(p_arch)
+            engine = "IEC_Omeiri_corrected"
 
     return {
-        "result":       result,
-        "engine_used":  engine,
-        "lambda_T1":    lT1,
-        "markov_criterion": lT1 > 0.1,
-        "warning":      warning,
+        "result":          result,
+        "engine_used":     engine,
+        "lambda_T1":       lT1,
+        "threshold_used":  threshold,
+        "markov_triggered": use_markov,
+        "warning":         warning,
     }
 
 
