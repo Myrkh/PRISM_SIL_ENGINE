@@ -6,6 +6,72 @@ Format: [Keep a Changelog](https://keepachangelog.com/en/1.0.0/) — Semantic Ve
 
 ---
 
+## [0.5.1] — 2026-03-11
+
+### Bug Fixes — route_compute (Bugs A, B, C) + find_crossover_thresholds
+
+**Bug A — route_compute pfh utilisait pfh_arch() (IEC brut)**
+Pour 1oo2 DC=0.9, λT1=0.07 (< 0.1, donc IEC sélectionné) :
+- Avant : pfh_arch() → erreur Source A = −89.8% (terme λ_DU×λ_DD×MTTR manquant)
+- Après : pfh_arch_corrected() → erreur résiduelle +0.7% (Source B uniquement)
+Source : Omeiri et al. (2021) §2.2 — terme manquant IEC.
+
+**Bug B — route_compute Markov héritait du Bug #11**
+Avant : chemin Markov appelait solver.compute_pfh() (steady-state).
+Pour 1oo3 λT1=0.5 : sous-estimation −25% (loi 2^p/(p+1), p=2).
+Après : appelle compute_exact() — sélection automatique TD pour N−M ≥ 2.
+Source : PRISM v0.5.0 Bug #11.
+
+**Bug C — seuil unique λT1 > 0.1 pour toutes architectures**
+Avant : seuil IEC §B.1 (0.1), empirique, sans justification quantitative.
+- Trop permissif pour 2oo3 DC=0 : erreur 7.7% dès λT1=0.05
+- Trop conservatif pour 1oo1 DC=0.9 : erreur 2.5% à λT1=0.5
+Après : adaptive_iec_threshold(arch, DC) depuis THRESHOLDS_OMEIRI_5PCT.
+Source : PRISM v0.5.0 Sprint D — calcul numérique sur grille TD exacte.
+
+**Bug D — find_crossover_thresholds vérifiait error_iec_pct (Source A+B)**
+Pour DC > 0, Source A seule dépasse 5% dès λT1=0.001, masquant le vrai seuil Source B.
+Avant : if abs(pt.error_iec_pct) > error_limit_pct
+Après : if abs(pt.error_omeiri_pct) > error_limit_pct
+Correction documentée dans la docstring de la fonction.
+
+### Nouvelle table précompilée : THRESHOLDS_OMEIRI_5PCT
+
+Seuils de bascule (Omeiri corrigé → Markov TD), critère 5% erreur résiduelle :
+
+```
+Arch    DC=0.00   DC=0.60   DC=0.90   DC=0.99
+1oo1    0.1010    0.2512    0.9859      inf
+1oo2    0.0495    0.1232    0.4976    4.2145
+2oo3    0.0332    0.0827    0.3246    2.8284
+1oo3      inf       inf       inf      inf   (corrected = TD exact)
+```
+
+Conditions de calcul : β=0, MTTR=8h, T1=8760h, grille 300 points log-espacés.
+Interpolation linéaire par morceaux pour DC intermédiaires.
+
+### Nouvelle fonction : adaptive_iec_threshold(arch, DC)
+
+Remplace `lambda_t1 > 0.1` partout dans le moteur.
+Expose aussi `markov_required(p)` adaptatif dans l'API publique.
+
+### Nouveaux tests (Groupe H, T25–T29)
+
+| Test | Description | Résultat |
+|---|---|---|
+| T25 | Bug A : route_compute pfh → Omeiri (δ < 5% vs TD) | ✅ |
+| T26 | Bug B : route_compute 1oo3 → TD exact (δ < 1%) | ✅ |
+| T27 | Bug C1 : 2oo3 DC=0 λT1=0.05 → Markov déclenché | ✅ |
+| T28 | Bug C2 : 1oo1 DC=0.9 λT1=0.5 → Omeiri utilisé | ✅ |
+| T29 | markov_required adaptatif 3 cas de référence | ✅ |
+
+**Bilan cumulatif v0.5.1 :** T01–T14 (14/14) + T20–T24 (5/5) + T25–T29 (5/5) = **24 tests, 100% pass.**
+
+**Files changed:** `error_surface.py`, `extensions.py`, `formulas.py`, `markov.py`,
+`tests/test_verification.py`
+
+---
+
 ## [0.5.0] — 2026-03-11
 
 ### 🔴 Bug Fix — Critical (Bug #11)
