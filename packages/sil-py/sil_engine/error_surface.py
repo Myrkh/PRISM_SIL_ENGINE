@@ -396,6 +396,107 @@ def print_error_report(result: ErrorSurfaceResult) -> None:
 # 5. COMPARAISON MULTI-ARCHITECTURES
 # ─────────────────────────────────────────────────────────────────────────────
 
+# ─────────────────────────────────────────────────────────────────────────────
+# TABLE DES SEUILS PRÉCOMPILÉS + INTERPOLATION
+# ─────────────────────────────────────────────────────────────────────────────
+
+# Seuils de bascule (Omeiri corrigé → Markov TD) précompilés.
+# Critère : erreur résiduelle |δ_Omeiri| > 5% (Source B uniquement).
+# Conditions de calcul : β=0, MTTR=8h, T1=8760h, grille 300 pts log-espacés.
+# Pour β>0, les seuils restent conservatifs (Source B indépendante de β en 1er ordre).
+#
+# Sources :
+#   PRISM v0.5.0 Sprint D — calcul numérique sur grille TD exacte
+#   PRISM v0.5.0 Sprint D.5 — correction critère error_omeiri_pct
+#   IEC 61508-6 §B.1 — seuil de référence (0.1, unique pour toutes archs)
+#
+# Lecture :
+#   1oo1 DC=0   : seuil 0.101 ≈ seuil IEC §B.1 (cohérent)
+#   1oo1 DC=0.9 : seuil 0.986 — 10× plus permissif (IEC §B.1 trop conservatif)
+#   2oo3 DC=0   : seuil 0.033 — 3× plus restrictif (IEC §B.1 trop permissif)
+#   1oo3        : ∞ — pfh_1oo3_corrected = TD exact, jamais de bascule nécessaire
+THRESHOLDS_OMEIRI_5PCT: dict[str, dict[float, float]] = {
+    # {arch: {DC_anchor: lambda_T1_seuil}}
+    "1oo1": {0.00: 0.1010, 0.60: 0.2512, 0.90: 0.9859, 0.99: float("inf")},
+    "1oo2": {0.00: 0.0495, 0.60: 0.1232, 0.90: 0.4976, 0.99: 4.2145},
+    "2oo3": {0.00: 0.0332, 0.60: 0.0827, 0.90: 0.3246, 0.99: 2.8284},
+    "1oo3": {0.00: float("inf"), 0.60: float("inf"), 0.90: float("inf"), 0.99: float("inf")},
+}
+
+
+def adaptive_iec_threshold(
+    arch: str,
+    DC: float,
+    criterion_pct: float = 5.0,
+) -> float:
+    """
+    Seuil λ×T1 adaptatif (architecture + DC) au-delà duquel le Markov TD est requis.
+
+    Interpole linéairement dans la table THRESHOLDS_OMEIRI_5PCT pour les DC
+    intermédiaires. Les valeurs sont conservatrices (β=0 worst-case pour Source B).
+
+    Pour criterion_pct = 5.0 (défaut) : utilise la table précompilée directement.
+    Pour criterion_pct ≠ 5.0 : recalcul numérique à la demande (coûteux, ~2 min).
+
+    Paramètres
+    ──────────
+    arch         : "1oo1", "1oo2", "2oo3", "1oo3"
+    DC           : couverture diagnostique [0, 1)
+    criterion_pct: erreur résiduelle Omeiri max acceptable [%] (défaut 5%)
+
+    Retourne
+    ────────
+    float : λ×T1 seuil. Au-delà, utiliser Markov TD.
+            float('inf') si la formule corrigée est toujours exacte (1oo3).
+
+    Sources
+    ───────
+    Table THRESHOLDS_OMEIRI_5PCT — PRISM v0.5.0 Sprint D (calcul numérique TD)
+    Interpolation linéaire par morceaux en DC — approximation conservative
+    IEC 61508-6 §B.1 — seuil historique (0.1) superseded par cette fonction
+    Chebila & Innal (2015) JLPPI 34:167-176 — concept de domaine de validité
+    """
+    if criterion_pct != 5.0:
+        # Recalcul exact à la demande (rare, pour research uniquement)
+        import numpy as np
+        thr = find_crossover_thresholds(
+            error_limit_pct=criterion_pct,
+            DC_values=[0.0, 0.6, 0.9, 0.99],
+        )
+        anchors = thr.get(arch, {})
+    else:
+        anchors = THRESHOLDS_OMEIRI_5PCT.get(arch, {})
+
+    if not anchors:
+        # Architecture inconnue → seuil conservatif IEC §B.1
+        return 0.1
+
+    # Interpolation linéaire par morceaux sur DC
+    dc_keys = sorted(anchors.keys())
+    vals = [anchors[k] for k in dc_keys]
+
+    # Extrapolation basse (DC < dc_keys[0]) → valeur la plus conservatrice
+    if DC <= dc_keys[0]:
+        return vals[0]
+    # Extrapolation haute (DC >= dc_keys[-1]) → valeur la plus permissive
+    if DC >= dc_keys[-1]:
+        return vals[-1]
+
+    # Interpolation linéaire entre les deux points encadrants
+    for i in range(len(dc_keys) - 1):
+        if dc_keys[i] <= DC < dc_keys[i + 1]:
+            dc_lo, dc_hi = dc_keys[i], dc_keys[i + 1]
+            v_lo, v_hi = vals[i], vals[i + 1]
+            # Gérer inf (DC=0.99 pour 1oo1)
+            if v_hi == float("inf"):
+                return float("inf")
+            t = (DC - dc_lo) / (dc_hi - dc_lo)
+            return v_lo + t * (v_hi - v_lo)
+
+    return vals[-1]
+
+
+
 def compare_architectures(
     lambda_T1_range: Optional[np.ndarray] = None,
     DC: float = 0.0,
@@ -497,7 +598,8 @@ def find_crossover_thresholds(
                     lambda_T1=lT1, DC=DC, arch=arch, N=N, M=M,
                     T1=T1, beta=beta, MTTR=MTTR,
                 )
-                if abs(pt.error_iec_pct) > error_limit_pct:
+                # CRITÈRE SOURCE B : erreur résiduelle Omeiri vs TD (pas IEC brut)
+                if abs(pt.error_omeiri_pct) > error_limit_pct:
                     seuil = lT1
                     break
             thresholds[arch][DC] = seuil
