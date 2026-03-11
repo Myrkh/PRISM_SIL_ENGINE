@@ -19,6 +19,7 @@ par des seuils fondés, différenciés par architecture et DC.
 | Référence | Contribution | Limite |
 |---|---|---|
 | IEC 61508-6:2010 §B.1 | Seuil unique λT1 < 0.1 | Empirique, non justifié, identique pour toutes architectures |
+| Validation à points discrets uniquement | aucune grille systématique (λT1, DC), aucun seuil de bascule | — |
 | Omeiri et al. (2021) JESA 54(6) | Corrections analytiques IEC | Analyse ponctuelle, pas de grille systématique |
 
 **Notre contribution** : première grille (λ×T1, DC) avec le Markov Time-Domain comme
@@ -146,6 +147,7 @@ pour 2oo3 à DC faible.
 | Que l'IEC simplifie | IEC §B.1 le dit | — |
 | Seuil λT1 < 0.1 | IEC §B.1 | Justification quantitative manquait |
 | Termes manquants IEC | Omeiri 2021 | — |
+| Validation à points discrets uniquement | aucune grille systématique (λT1, DC), aucun seuil de bascule | — |
 | **Séparation Sources A et B** | **Aucune source** | **Contribution originale** |
 | **Seuils différenciés par (arch, DC)** | **Aucune source** | **Contribution originale** |
 | **Propriété seuil ∝ 1/(1−DC)** | **Aucune source** | **Contribution originale** |
