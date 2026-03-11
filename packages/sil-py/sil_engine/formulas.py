@@ -529,9 +529,39 @@ def lambda_T1_product(p: SubsystemParams) -> float:
     return (p.lambda_DU + p.lambda_DD) * p.T1
 
 
-def markov_required(p: SubsystemParams, threshold: float = 0.1) -> bool:
-    """True si Markov exact recommandé (λ×T1 > threshold)."""
-    return lambda_T1_product(p) > threshold
+def markov_required(
+    p: SubsystemParams,
+    threshold: float = None,
+) -> bool:
+    """
+    True si le Markov TD exact est requis (formule Omeiri corrigée insuffisante).
+
+    Utilise par défaut le seuil adaptatif par (architecture, DC) calculé dans
+    error_surface.py (Sprint D), critère 5% d'erreur résiduelle.
+    Si threshold est fourni explicitement, utilise cette valeur fixe.
+
+    Seuil adaptatif vs seuil IEC §B.1 (0.1 fixe) :
+        1oo1 DC=0   : 0.101 ≈ IEC §B.1 (cohérent)
+        1oo1 DC=0.9 : 0.986 (IEC §B.1 dix fois trop conservatif)
+        2oo3 DC=0   : 0.033 (IEC §B.1 trois fois trop permissif)
+        1oo3        : ∞     (pfh_1oo3_corrected = TD exact)
+
+    Sources :
+        PRISM v0.5.0 Sprint D.5 — seuils adaptatifs (arch, DC)
+        IEC 61508-6 §B.1 — seuil historique λT1 < 0.1 (superseded)
+        error_surface.adaptive_iec_threshold() — interpolation linéaire par morceaux
+    """
+    lT1 = lambda_T1_product(p)
+    if threshold is None:
+        # Calcul du DC effectif à partir des taux de défaillance
+        lD = p.lambda_DU + p.lambda_DD
+        DC_eff = (p.lambda_DD / lD) if lD > 0 else 0.0
+        try:
+            from .error_surface import adaptive_iec_threshold
+            threshold = adaptive_iec_threshold(p.architecture, DC_eff)
+        except Exception:
+            threshold = 0.1  # fallback conservatif IEC §B.1
+    return lT1 > threshold
 
 
 def sil_from_pfd(pfd: float) -> int:
