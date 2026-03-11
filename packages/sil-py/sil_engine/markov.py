@@ -427,10 +427,27 @@ def compute_exact(p: SubsystemParams, mode: str = "low_demand") -> dict:
 
     warnings = []
     lambda_t1 = lambda_T1_product(p)
-    if lambda_t1 > 0.3:
-        warnings.append(f"λ×T1 = {lambda_t1:.3f} > 0.3 : Markov exact requis")
-    elif lambda_t1 > 0.1:
-        warnings.append(f"λ×T1 = {lambda_t1:.3f} > 0.1 : Markov exact recommandé")
+
+    # Seuil adaptatif (Sprint D.5) — remplace le seuil unique 0.1 d'IEC §B.1.
+    # Source : PRISM v0.5.0 error_surface.THRESHOLDS_OMEIRI_5PCT.
+    try:
+        from .error_surface import adaptive_iec_threshold
+        lD = p.lambda_DU + p.lambda_DD
+        DC_eff = (p.lambda_DD / lD) if lD > 0 else 0.0
+        threshold_warn = adaptive_iec_threshold(p.architecture, DC_eff)
+    except Exception:
+        threshold_warn = 0.1  # fallback conservatif IEC §B.1
+
+    if threshold_warn < float("inf") and lambda_t1 > threshold_warn * 2:
+        warnings.append(
+            f"λ×T1 = {lambda_t1:.3f} >> seuil({p.architecture}, DC≈{DC_eff:.2f}) "
+            f"= {threshold_warn:.3f} : Markov TD fortement requis (erreur Omeiri > 10%)"
+        )
+    elif threshold_warn < float("inf") and lambda_t1 > threshold_warn:
+        warnings.append(
+            f"λ×T1 = {lambda_t1:.3f} > seuil adaptatif {threshold_warn:.3f} "
+            f"pour {p.architecture} DC≈{DC_eff:.2f} : formule Omeiri insuffisante (>5%)"
+        )
 
     solver = MarkovSolver(p)
 
